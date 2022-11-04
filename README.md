@@ -1,6 +1,8 @@
 # RNNTransducer
-Streaming 가능한 RNN Transducer 모델을 PyTorch Lightning으로 구현해본다. (거의 Conversion에 가까울듯)
-https://arxiv.org/abs/1211.3711
+Streaming 가능한 RNN Transducer 모델을 PyTorch Lightning으로 구현해본다. (거의 Conversion에 가까울듯) <br />
+paper reference: https://arxiv.org/abs/1211.3711 <br />
+torch-lightning: https://www.pytorchlightning.ai/ <br />
+torch-lightning dev guide: [https://pytorch-lightning.readthedocs.io/en/stable/common/trainer.html](https://pytorch-lightning.readthedocs.io/en/latest/) <br />
 ![1](https://user-images.githubusercontent.com/34292279/199925209-29902b23-1b8f-403e-88c5-439afa8a8165.png)
 
 
