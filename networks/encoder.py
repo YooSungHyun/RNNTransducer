@@ -24,9 +24,9 @@ class AudioTransNet(nn.Module):
     the input is the speech features and projects it to high level feature representation.
 
     Args:
-        input_dim (int): dimension of input vector
-        hidden_state_dim (int, optional): hidden state dimension of encoder (default: 320)
-        output_dim (int, optional): output dimension of encoder and decoder (default: 512)
+        input_size (int): dimension of input vector
+        hidden_size (int, optional): hidden state dimension of encoder (default: 320)
+        output_size (int, optional): output dimension of encoder and decoder (default: 512)
         num_layers (int, optional): number of encoder layers (default: 4)
         rnn_type (str, optional): type of rnn cell (default: lstm)
         bidirectional (bool, optional): if True, becomes a bidirectional encoder (default: True)
@@ -53,37 +53,27 @@ class AudioTransNet(nn.Module):
 
     def __init__(
         self,
-        input_dim: int,
-        hidden_state_dim: int,
-        output_dim: int,
+        input_size: int,
+        hidden_size: int,
+        output_size: int,
         num_layers: int,
         rnn_type: str = "lstm",
-        dropout_p: float = 0.2,
+        dropout: float = 0.2,
         bidirectional: bool = True,
     ):
         super(AudioTransNet, self).__init__()
-        self.hidden_state_dim = hidden_state_dim
+        self.hidden_size = hidden_size
         rnn_cell = self.supported_rnns[rnn_type.lower()]
         self.rnn = rnn_cell(
-            input_size=input_dim,
-            hidden_size=hidden_state_dim,
+            input_size=input_size,
+            hidden_size=hidden_size,
             num_layers=num_layers,
             bias=True,
             batch_first=True,
-            dropout=dropout_p,
+            dropout=dropout,
             bidirectional=bidirectional,
         )
-        self.out_proj = nn.Linear(hidden_state_dim << 1 if bidirectional else hidden_state_dim, output_dim)
-
-    def count_parameters(self) -> int:
-        """Count parameters of encoder"""
-        return sum([p.numel for p in self.parameters()])
-
-    def update_dropout(self, dropout_p: float) -> None:
-        """Update dropout probability of encoder"""
-        for name, child in self.named_children():
-            if isinstance(child, nn.Dropout):
-                child.p = dropout_p
+        self.out_proj = nn.Linear(hidden_size << 1 if bidirectional else hidden_size, output_size)
 
     def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
         """
