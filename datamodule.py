@@ -2,12 +2,12 @@ import os
 import torch
 import pytorch_lightning as pl
 from utils import get_concat_dataset
-from torch.utils.data import random_split, DataLoader
+from torch.utils.data import DataLoader
 from torchaudio.transforms import MelSpectrogram, TimeMasking, FrequencyMasking
 import matplotlib.pyplot as plt
 import numpy as np
 from argparse import Namespace
-from datasets import concatenate_datasets, Dataset
+from datasets import Dataset
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -25,6 +25,8 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.pl_data_dir = args.pl_data_dir
         self.num_shards = args.num_shards
         self.seed = args.seed
+        self.per_device_train_batch_size = args.per_device_train_batch_size
+        self.per_device_eval_batch_size = args.per_device_eval_batch_size
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
         self.sample_rate = config["audio"]["sample_rate"]
@@ -68,7 +70,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         batch["input_values"] = log_melspect
         return batch
 
-    def load_raw_to_melspect_datasets(
+    def save_raw_to_melspect_datasets(
         self, source_dataset_dir: str, target_dataset_dir: str, train_type: str
     ) -> Dataset:
         """
@@ -81,7 +83,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
         if os.path.isdir(target_dataset_dir):
             # target이 이미 존재하면, 새로 만들지 않고, 불러옵니다.
-            datasets = get_concat_dataset(target_dataset_dir, train_type)
+            print("이미 datasets이 존재합니다. save과정은 스킵됩니다!!!")
         else:
             datasets = get_concat_dataset(source_dataset_dir, train_type)
 
@@ -97,39 +99,56 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
                 dataset_lists.append(shard_datasets)
 
-                datasets = concatenate_datasets(dataset_lists)
-        datasets.set_format("torch")
-        return datasets
-
     def prepare_data(self):
-        # prepare에서는 기존에 HuggingFace에서 load_dataset -> map 작업들을 하면 됩니다.
+        # prepare에서는 병렬처리 복잡도를 낮추고, 혹은 병렬처리 시 데이터가 손상될 위협을 방지하기위해 단일 CPU 프로세스로만 진행이 됩니다. (다중노드에서 사용하려면, prepare_data_per_node를 참고)
+        # 따라서, prepare에서 class 변수에 특정 상태를 저장하지 마십시오. 단일 프로세스로만 진행되므로, 다른 프로세스에서 참고할 수 없습니다.
+
+        # 데이터를 다운받고, 토크나이즈하고, 파일 시스템에 저장하는 task를 수행하십시오.
+        # TODO: 개인적으로 궁금한게 Streaming으로 데이터를 다운로드받는 와중에 학습시킨다면, prepare_data는 pass되어야 할까요?
+
         # 여기서 진행하는 작업은 전체 데이터셋을 기준으로 합니다. 꼭 한번에 전체를 해야할지 잘 고민하십시오.
-        # 음성은 collate에서 하면 더 오래걸릴 소요가 있어서 여기서 다하고 저장할란다...
-        self.train_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
-        self.dev_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
-        self.clean_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "clean")
-        self.other_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "other")
+        # log mel spectrogram으로 변환하는게 마침 1회만 진행하면 되고, 있으면 무시되면 되서 여기에 딱 알맞는 Task입니다.
+        # 사실 더 명확하게 하려면, 여기서는 raw_audio의 datasets를 다운받는 정도의 Task만 진행하고, log mel spectrogram 변환은 setup에서 하는게 더 나을지도 모르겠습니다. (GPU가 더 빠르려나?)
+        self.save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
+        self.save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
+        self.save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "clean")
+        self.save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "other")
 
     def setup(self, stage: str):
+        # prepare_data가 정상적으로 동작되면 호출됩니다. setup은 각 모든 GPU에서 호출됩니다.
+        # 사용 가능한 모든 데이터들에 대한 모든 프로세스의 setup은 1번만 진행되도록 보장되어있습니다. (병렬처리하더라도, 1 data 1 setup을 보장한다는 의미같음.)
+        # 분류할 개수를 세거나, vocab을 만들거나, train/val/test splits을 하거나, datasets를 만들(선언하)거나, transforms를 수행해야 하거나
         # 각각의 split stage에 맞는 torch형 datasets를 구성합니다.
         # 모든 데이터셋을 한번에 읽어올 필요가 없다면, stage를 pass하거나 None으로 정의하십시오. (아마 콜레터를 쓰거나, train, test step에서 하고싶을 수 있으니까?)
-        # Assign train/val datasets for use in dataloaders
+        # stage must like {fit,validate,test,predict}
         if stage == "fit":
-            mnist_full = MNIST(self.data_dir, train=True, transform=self.transform)
-            self.mnist_train, self.mnist_val = random_split(mnist_full, [55000, 5000])
+            self.train_datasets = get_concat_dataset(self.pl_data_dir, "train")
+            self.train_datasets = self.train_datasets.set_format("torch")
+            self.val_datasets = get_concat_dataset(self.pl_data_dir, "dev")
+            self.val_datasets = self.val_datasets.set_format("torch")
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test":
-            self.mnist_test = MNIST(self.data_dir, train=False, transform=self.transform)
-
-        if stage == "predict":
-            self.mnist_predict = MNIST(self.data_dir, train=False, transform=self.transform)
+            self.clean_datasets = get_concat_dataset(self.pl_data_dir, "eval_clean")
+            self.clean_datasets = self.clean_datasets.set_format("torch")
+            self.other_datasets = get_concat_dataset(self.pl_data_dir, "eval_other")
+            self.other_datasets = self.other_datasets.set_format("torch")
 
     def train_dataloader(self):
-        return DataLoader(self.train_datasets, batch_size=32)
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
+        return DataLoader(self.train_datasets, batch_size=self.per_device_train_batch_size)
 
     def val_dataloader(self):
-        return DataLoader(self.dev_datasets, batch_size=32)
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
+        return DataLoader(self.val_datasets, batch_size=self.per_device_eval_batch_size)
 
     def test_dataloader(self):
-        return [DataLoader(self.clean_datasets), DataLoader(self.other_datasets)]
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
+        return [
+            DataLoader(self.clean_datasets, batch_size=1),
+            DataLoader(self.other_datasets, batch_size=1),
+        ]
+
+    def predict_dataloader(self):
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 predict() method가 사용합니다.
+        pass
