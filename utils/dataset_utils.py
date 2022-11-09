@@ -77,5 +77,4 @@ def get_concat_dataset(dataset_dirs: List[os.PathLike], train_type: str) -> Data
                     )
         dataset_lists.append(postprocess_dataset)
     concat_dataset = concatenate_datasets(dataset_lists)
-    concat_dataset.set_format("np")
     return concat_dataset
