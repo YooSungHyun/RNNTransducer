@@ -1,50 +1,41 @@
 {
-    "name": "Mnist_LeNet",
-    "n_gpu": 1,
-
-    "arch": {
-        "type": "MnistModel",
-        "args": {}
-    },
-    "data_loader": {
-        "type": "MnistDataLoader",
-        "args":{
-            "data_dir": "data/",
-            "batch_size": 128,
-            "shuffle": true,
-            "validation_split": 0.1,
-            "num_workers": 2
+    "model": {
+        "transnet": {
+            "input_size": 200,
+            "hidden_size": 320,
+            "output_size": 512,
+            "num_layers": 2,
+            "rnn_type": "lstm",
+            "dropout": 0.2,
+            "bidirectional": true
+        },
+        "prednet": {
+            "embedding_size": 72,
+            "hidden_size": 512,
+            "output_size": 512,
+            "num_layers": 1,
+            "rnn_type": "lstm",
+            "bos_token_id": 2,
+            "eos_token_id": 3,
+            "dropout": 0.2
+        },
+        "jointnet": {
+            "num_classes": 72,
+            "input_size": 512
         }
     },
-    "optimizer": {
-        "type": "Adam",
-        "args":{
-            "lr": 0.001,
-            "weight_decay": 0,
-            "amsgrad": true
-        }
-    },
-    "loss": "nll_loss",
-    "metrics": [
-        "accuracy", "top_k_acc"
-    ],
-    "lr_scheduler": {
-        "type": "StepLR",
-        "args": {
-            "step_size": 50,
-            "gamma": 0.1
-        }
-    },
-    "trainer": {
-        "epochs": 100,
-
-        "save_dir": "saved/",
-        "save_period": 1,
-        "verbosity": 2,
-        
-        "monitor": "min val_loss",
-        "early_stop": 10,
-
-        "tensorboard": true
+    "data": {
+        "audio": {
+            "window_stride_sec": 0.01,
+            "window_size_sec": 0.025,
+            "sample_rate": 16000,
+            "window": "hamming",
+            "normalize": true,
+            "spec_augment": true,
+            "n_mels": 80,
+            "time_mask_para": 40,
+            "freq_mask_para": 20
+        },
+        "text": {}
     }
 }
