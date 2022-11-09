@@ -24,14 +24,14 @@ class TextPredNet(nn.Module):
     predict network in the model architecture
 
     Args:
-        num_classes (int): number of classification
-        hidden_state_dim (int, optional): hidden state dimension of decoder (default: 512)
-        output_dim (int, optional): output dimension of encoder and decoder (default: 512)
+        embedding_size (int): number of classification
+        hidden_size (int, optional): hidden state dimension of decoder (default: 512)
+        output_size (int, optional): output dimension of encoder and decoder (default: 512)
         num_layers (int, optional): number of decoder layers (default: 1)
         rnn_type (str, optional): type of rnn cell (default: lstm)
-        sos_id (int, optional): start of sentence identification
-        eos_id (int, optional): end of sentence identification
-        dropout_p (float, optional): dropout probability of decoder
+        bos_token_id (int, optional): start of sentence identification
+        eos_token_id (int, optional): end of sentence identification
+        dropout (float, optional): dropout probability of decoder
 
     Inputs: inputs, input_lengths
         inputs (torch.LongTensor): A target sequence passed to decoder. `IntTensor` of size ``(batch, seq_length)``
@@ -56,41 +56,31 @@ class TextPredNet(nn.Module):
 
     def __init__(
         self,
-        num_classes: int,
-        hidden_state_dim: int,
-        output_dim: int,
+        embedding_size: int,
+        hidden_size: int,
+        output_size: int,
         num_layers: int,
         rnn_type: str = "lstm",
-        sos_id: int = 1,
-        eos_id: int = 2,
-        dropout_p: float = 0.2,
+        bos_token_id: int = 2,
+        eos_token_id: int = 3,
+        dropout: float = 0.2,
     ):
         super(TextPredNet, self).__init__()
-        self.hidden_state_dim = hidden_state_dim
-        self.sos_id = sos_id
-        self.eos_id = eos_id
-        self.embedding = nn.Embedding(num_classes, hidden_state_dim)
+        self.hidden_size = hidden_size
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.embedding = nn.Embedding(embedding_size, hidden_size)
         rnn_cell = self.supported_rnns[rnn_type.lower()]
         self.rnn = rnn_cell(
-            input_size=hidden_state_dim,
-            hidden_size=hidden_state_dim,
+            input_size=hidden_size,
+            hidden_size=hidden_size,
             num_layers=num_layers,
             bias=True,
             batch_first=True,
-            dropout=dropout_p,
+            dropout=dropout,
             bidirectional=False,
         )
-        self.out_proj = nn.Linear(hidden_state_dim, output_dim)
-
-    def count_parameters(self) -> int:
-        """Count parameters of encoder"""
-        return sum([p.numel for p in self.parameters()])
-
-    def update_dropout(self, dropout_p: float) -> None:
-        """Update dropout probability of encoder"""
-        for name, child in self.named_children():
-            if isinstance(child, nn.Dropout):
-                child.p = dropout_p
+        self.out_proj = nn.Linear(hidden_size, output_size)
 
     def forward(
         self,
