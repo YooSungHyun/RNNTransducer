@@ -84,6 +84,7 @@ class RNNTransducer(pl.LightningModule):
         return outputs
 
     def forward(self, inputs, inputs_lengths, targets, targets_lengths):
+        # Use for inference only (separate from training_step)
         zero = torch.zeros((targets.shape[0], 1)).long()
         targets_add_blank = torch.cat((zero, targets), dim=1)
         enc_state, _ = self.transnet(inputs, inputs_lengths)
