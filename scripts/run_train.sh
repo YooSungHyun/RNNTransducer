@@ -13,6 +13,8 @@ torchrun --standalone --nnodes=1 --nproc_per_node=3 /data2/bart/temp_workspace/s
     --num_shards=20 \
     --model_config="/data2/bart/temp_workspace/stt/RNNTransducer/config.json" \
     --seed=42 \
+    --per_device_train_batch_size=32 \
+    --per_device_eval_batch_size=32 \
     --check_val_every_n_epoch=1 \
     --accumulate_grad_batches=1 \
     --max_epochs=100 \

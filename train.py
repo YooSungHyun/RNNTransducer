@@ -41,5 +41,17 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", default=0.001, type=float, help="ddp local rank")
     parser.add_argument("--max_lr", default=0.01, type=float, help="ddp local rank")
     parser.add_argument("--weight_decay", default=0.0001, type=float, help="ddp local rank")
+    parser.add_argument(
+        "--per_device_train_batch_size",
+        default=1,
+        type=int,
+        help="The batch size per GPU/TPU core/CPU for training.",
+    )
+    parser.add_argument(
+        "--per_device_eval_batch_size",
+        default=1,
+        type=int,
+        help="The batch size per GPU/TPU core/CPU for evaluation.",
+    )
     args = parser.parse_args()
     main(args)
