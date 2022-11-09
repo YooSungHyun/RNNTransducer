@@ -3,11 +3,11 @@ import torch
 import pytorch_lightning as pl
 from utils import get_concat_dataset
 from torch.utils.data import random_split, DataLoader
-import numpy as np
 from torchaudio.transforms import MelSpectrogram, TimeMasking, FrequencyMasking
 import matplotlib.pyplot as plt
+import numpy as np
 from argparse import Namespace
-from datasets import concatenate_datasets
+from datasets import concatenate_datasets, Dataset
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -22,9 +22,8 @@ class RNNTransducerDataModule(pl.LightningDataModule):
     def __init__(self, config: dict, args: Namespace):
         super().__init__()
         self.hf_data_dirs = args.hf_data_dirs
-        self.pl_data_dirs = args.pl_data_dirs
-        # 명심!!!!!
-        self.train_shard_cnt = int(args.pl_data_dirs.split("-")[-1])
+        self.pl_data_dir = args.pl_data_dir
+        self.num_shards = args.num_shards
         self.seed = args.seed
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
@@ -46,67 +45,70 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # 얼마만큼 밀면서 자를것이냐, (얼마만큼 겹치게 할 것이냐) 1부터 숫자에서 win_length가 10 hop_length를 2로 하면, 1~10 -> 3~13 과 같은 형태로 밀림.
         hop_length = int(self.sample_rate * self.window_stride_sec)
 
-        x = batch["input_values"]
+        raw_audio = torch.FloatTensor([batch["input_values"]])
         if self.normalize:
             # HuggingFace Style MeanVarNorm
-            x = [(x - x.mean()) / np.sqrt(x.var() + 1e-7)]
+            raw_audio = (raw_audio - raw_audio.mean()) / torch.sqrt(raw_audio.var() + 1e-7)
 
         # log_mel spec (channel(mono(1), 2~3 etc), n_mels, time)
-        mel_spec = MelSpectrogram(
+        mel_spect = MelSpectrogram(
             sample_rate=self.sample_rate, win_length=win_length, n_fft=n_fft, hop_length=hop_length, n_mels=self.n_mels
-        )(torch.Tensor(x))
-        x = np.log1p(mel_spec)
+        )(raw_audio)
+        log_melspect = torch.log1p(mel_spect)
 
         if self.spec_augment:
             torch.random.manual_seed(self.seed)
-            x = FrequencyMasking(freq_mask_param=self.freq_mask_para)(x)
-            x = TimeMasking(time_mask_param=self.time_mask_para)(x)
+            log_melspect = FrequencyMasking(freq_mask_param=self.freq_mask_para)(log_melspect)
+            log_melspect = TimeMasking(time_mask_param=self.time_mask_para)(log_melspect)
 
         if False:
             path = "./test_img"
             os.makedirs(path, exist_ok=True)
-            plt.imsave("./test_img/" + str(idx) + ".png", x[0])
-        batch["input_values"] = x
+            plt.imsave("./test_img/" + str(idx) + ".png", log_melspect[0])
+        batch["input_values"] = log_melspect
         return batch
 
-    def save_raw_to_melspect_datasets(self, source_dataset, train_type):
-        # 기존에 raw로 저장해놓은 huggingface datasets를 불러와, log melspectrogram 형태로 map합니다.
-        # 성공 시, datasets를 shard하여 저장하고, 전체 datasets을 return합니다.
-        datasets = get_concat_dataset(self.hf_data_dirs, train_type)
-        if train_type == "train":
-            shard_cnt = self.train_shard_cnt
+    def load_raw_to_melspect_datasets(
+        self, source_dataset_dir: str, target_dataset_dir: str, train_type: str
+    ) -> Dataset:
+        """
+        기존에 raw로 저장해놓은 huggingface datasets를 불러와, log melspectrogram 형태로 map합니다. \n
+        이미 log melspectrogram datasets가 있다면, 기존 것을 가져다 씁니다. \n
+        성공 시, datasets를 shard하여 저장하고, 전체 datasets을 return합니다.
+        """
+        assert source_dataset_dir is not None, "log mel로 변환할 data source 경로가 없습니다!"
+        assert target_dataset_dir is not None, "log mel을 저장할 data target 경로가 없습니다!"
+
+        if os.path.isdir(target_dataset_dir):
+            # target이 이미 존재하면, 새로 만들지 않고, 불러옵니다.
+            datasets = get_concat_dataset(target_dataset_dir, train_type)
         else:
-            shard_cnt = 1
+            datasets = get_concat_dataset(source_dataset_dir, train_type)
 
-        dataset_lists = []
-        for shard_idx in range(shard_cnt):
-            shard_datasets = datasets.shard(num_shards=shard_cnt, index=shard_idx)
-            shard_datasets = shard_datasets.map(self.__parse_audio, with_indices=True)
-            shard_datasets.save_to_disk(os.path.join(self.pl_data_dirs, train_type, str(shard_idx)))
-            dataset_lists.append(shard_datasets)
+            if train_type == "train":
+                num_shards = self.num_shards
+            else:
+                num_shards = 1
 
-        concat_dataset = concatenate_datasets(dataset_lists)
-        concat_dataset.set_format("torch")
-        return concat_dataset
+            dataset_lists = []
+            for shard_idx in range(num_shards):
+                shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
+                shard_datasets = shard_datasets.map(self.__parse_audio, with_indices=True)
+                shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
+                dataset_lists.append(shard_datasets)
+
+                datasets = concatenate_datasets(dataset_lists)
+        datasets.set_format("torch")
+        return datasets
 
     def prepare_data(self):
         # prepare에서는 기존에 HuggingFace에서 load_dataset -> map 작업들을 하면 됩니다.
         # 여기서 진행하는 작업은 전체 데이터셋을 기준으로 합니다. 꼭 한번에 전체를 해야할지 잘 고민하십시오.
         # 음성은 collate에서 하면 더 오래걸릴 소요가 있어서 여기서 다하고 저장할란다...
-        if os.path.isdir(self.pl_data_dirs):
-            self.train_datasets = get_concat_dataset(self.pl_data_dirs, "train")
-            self.train_datasets.set_format("torch")
-            self.dev_datasets = get_concat_dataset(self.pl_data_dirs, "dev")
-            self.dev_datasets.set_format("torch")
-            self.clean_datasets = get_concat_dataset(self.pl_data_dirs, "clean")
-            self.clean_datasets.set_format("torch")
-            self.other_datasets = get_concat_dataset(self.pl_data_dirs, "other")
-            self.other_datasets.set_format("torch")
-        else:
-            self.train_datasets = self.save_raw_to_melspect_datasets(self.hf_data_dirs, "train")
-            self.dev_datasets = self.save_raw_to_melspect_datasets(self.hf_data_dirs, "dev")
-            self.clean_datasets = self.save_raw_to_melspect_datasets(self.hf_data_dirs, "clean")
-            self.other_datasets = self.save_raw_to_melspect_datasets(self.hf_data_dirs, "other")
+        self.train_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
+        self.dev_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
+        self.clean_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "clean")
+        self.other_datasets = self.load_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "other")
 
     def setup(self, stage: str):
         # 각각의 split stage에 맞는 torch형 datasets를 구성합니다.
