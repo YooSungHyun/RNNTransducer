@@ -48,10 +48,12 @@ if __name__ == "__main__":
     parser.add_argument("--hf_data_dirs", nargs="+", default=[], type=str, help="source HuggingFace data dirs")
     parser.add_argument("--pl_data_dir", type=str, help="target pytorch lightning data dirs")
     parser.add_argument("--num_shards", type=int, help="target data shard cnt")
+    parser.add_argument("--num_proc", type=int, default=None, help="how many proc map?")
+    parser.add_argument("--cache_dir", type=str, default=None, help="datasets cache dir path")
     parser.add_argument("--model_config", type=str, help="data dirs")
-    parser.add_argument("--learning_rate", default=0.001, type=float, help="ddp local rank")
-    parser.add_argument("--max_lr", default=0.01, type=float, help="ddp local rank")
-    parser.add_argument("--weight_decay", default=0.0001, type=float, help="ddp local rank")
+    parser.add_argument("--learning_rate", default=0.001, type=float, help="learning rate")
+    parser.add_argument("--max_lr", default=0.01, type=float, help="lr_scheduler max learning rate")
+    parser.add_argument("--weight_decay", default=0.0001, type=float, help="weigth decay")
     parser.add_argument(
         "--per_device_train_batch_size",
         default=1,

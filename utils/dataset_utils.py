@@ -78,3 +78,10 @@ def get_concat_dataset(dataset_dirs: List[os.PathLike], train_type: str) -> Data
         dataset_lists.append(postprocess_dataset)
     concat_dataset = concatenate_datasets(dataset_lists)
     return concat_dataset
+
+
+def get_cache_file_path(cache_dir: str, cache_task_func: callable, num_proc: int) -> str:
+    if cache_dir is None:
+        return None
+    else:
+        return os.path.join(cache_dir, cache_task_func.__name__, str(num_proc))

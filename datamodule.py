@@ -1,7 +1,7 @@
 import os
 import torch
 import pytorch_lightning as pl
-from utils import get_concat_dataset
+from utils import get_concat_dataset, get_cache_file_path
 from torch.utils.data import DataLoader
 from torchaudio.transforms import MelSpectrogram, TimeMasking, FrequencyMasking
 import matplotlib.pyplot as plt
@@ -27,6 +27,8 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.seed = args.seed
         self.per_device_train_batch_size = args.per_device_train_batch_size
         self.per_device_eval_batch_size = args.per_device_eval_batch_size
+        self.num_proc = args.num_proc
+        self.cache_dir = args.cache_dir
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
         self.sample_rate = config["audio"]["sample_rate"]
@@ -37,7 +39,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.time_mask_para = config["audio"]["time_mask_para"]
         self.n_mels = config["audio"]["n_mels"]
 
-    def __parse_audio(self, batch, idx):
+    def raw_to_logmelspect(self, batch, idx):
         # window_size는 통상 사람이 변화를 느끼는 한계인 25ms을 기본으로 합니다 (0.025)
         # 16000 * 0.025 = 400
         win_length = int(np.ceil(self.sample_rate * self.window_size_sec))
@@ -58,19 +60,22 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         )(raw_audio)
         log_melspect = torch.log1p(mel_spect)
 
-        if self.spec_augment:
-            torch.random.manual_seed(self.seed)
-            log_melspect = FrequencyMasking(freq_mask_param=self.freq_mask_para)(log_melspect)
-            log_melspect = TimeMasking(time_mask_param=self.time_mask_para)(log_melspect)
-
         if False:
             path = "./test_img"
             os.makedirs(path, exist_ok=True)
             plt.imsave("./test_img/" + str(idx) + ".png", log_melspect[0])
+
         batch["input_values"] = log_melspect
         return batch
 
-    def __save_raw_to_melspect_datasets(
+    def spec_augmentation(self, batch):
+        torch.random.manual_seed(self.seed)
+        freq_mask_data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(batch["input_values"])
+        freq_time_mask_data = TimeMasking(time_mask_param=self.time_mask_para)(freq_mask_data)
+        batch["input_values"] = freq_time_mask_data
+        return batch
+
+    def __save_raw_to_logmelspect_datasets(
         self, source_dataset_dir: str, target_dataset_dir: str, train_type: str
     ) -> Dataset:
         """
@@ -81,9 +86,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         assert source_dataset_dir is not None, "log mel로 변환할 data source 경로가 없습니다!"
         assert target_dataset_dir is not None, "log mel을 저장할 data target 경로가 없습니다!"
 
-        if os.path.isdir(target_dataset_dir):
+        print("check dir: ", os.path.join(target_dataset_dir, train_type))
+        if os.path.isdir(os.path.join(target_dataset_dir, train_type)):
             # target이 이미 존재하면, 새로 만들지 않고, 불러옵니다.
-            print("이미 datasets이 존재합니다. save과정은 스킵됩니다!!!")
+            print(f"이미 datasets이 존재합니다. {train_type} save과정은 스킵됩니다!!!")
         else:
             datasets = get_concat_dataset(source_dataset_dir, train_type)
 
@@ -95,7 +101,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             dataset_lists = []
             for shard_idx in range(num_shards):
                 shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
-                shard_datasets = shard_datasets.map(self.__parse_audio, with_indices=True)
+                cache_file_name = get_cache_file_path(self.cache_dir, self.raw_to_logmelspect, self.num_proc)
+                shard_datasets = shard_datasets.map(
+                    self.raw_to_logmelspect, cache_file_name=cache_file_name, num_proc=self.num_proc, with_indices=True
+                )
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
                 dataset_lists.append(shard_datasets)
 
@@ -109,10 +118,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # 여기서 진행하는 작업은 전체 데이터셋을 기준으로 합니다. 꼭 한번에 전체를 해야할지 잘 고민하십시오.
         # log mel spectrogram으로 변환하는게 마침 1회만 진행하면 되고, 있으면 무시되면 되서 여기에 딱 알맞는 Task입니다.
         # 사실 더 명확하게 하려면, 여기서는 raw_audio의 datasets를 다운받는 정도의 Task만 진행하고, log mel spectrogram 변환은 setup에서 하는게 더 나을지도 모르겠습니다. (GPU가 더 빠르려나?)
-        self.__save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
-        self.__save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
-        self.__save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "clean")
-        self.__save_raw_to_melspect_datasets(self.hf_data_dirs, self.pl_data_dir, "other")
+        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
+        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
+        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_clean")
+        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_other")
 
     def setup(self, stage: str):
         # prepare_data가 정상적으로 동작되면 호출됩니다. setup은 각 모든 GPU에서 호출됩니다.
@@ -123,6 +132,11 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # stage must like {fit,validate,test,predict}
         if stage == "fit":
             self.train_datasets = get_concat_dataset(self.pl_data_dir, "train")
+            if self.spec_augment:
+                cache_file_name = get_cache_file_path(self.cache_dir, self.spec_augmentation, self.num_proc)
+                self.train_datasets = self.train_datasets.map(
+                    self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
+                )
             self.train_datasets = self.train_datasets.set_format("torch")
             self.val_datasets = get_concat_dataset(self.pl_data_dir, "dev")
             self.val_datasets = self.val_datasets.set_format("torch")
