@@ -28,6 +28,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.per_device_train_batch_size = args.per_device_train_batch_size
         self.per_device_eval_batch_size = args.per_device_eval_batch_size
         self.num_proc = args.num_proc
+        self.pad_token_id = config["audio"]["pad_token_id"]
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
         self.sample_rate = config["audio"]["sample_rate"]
@@ -36,6 +37,8 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.spec_augment = config["audio"]["spec_augment"]
         self.freq_mask_para = config["audio"]["freq_mask_para"]
         self.time_mask_para = config["audio"]["time_mask_para"]
+        self.freq_mask_cnt = config["audio"]["freq_mask_cnt"]
+        self.time_mask_cnt = config["audio"]["time_mask_cnt"]
         self.n_mels = config["audio"]["n_mels"]
 
     def raw_to_logmelspect(self, batch, idx):
@@ -68,12 +71,14 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         return batch
 
     def spec_augmentation(self, batch):
-        torch.random.manual_seed(self.seed)
-        freq_mask_data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(
-            torch.FloatTensor(batch["input_values"])
-        )
-        freq_time_mask_data = TimeMasking(time_mask_param=self.time_mask_para)(freq_mask_data)
-        batch["input_values"] = freq_time_mask_data
+        # torch.random.manual_seed(self.seed)
+        data = torch.FloatTensor(batch["input_values"])
+
+        for _ in range(self.freq_mask_cnt):
+            data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(data)
+        for _ in range(self.time_mask_cnt):
+            data = TimeMasking(time_mask_param=self.time_mask_para)(data)
+        batch["input_values"] = data
         return batch
 
     def __save_raw_to_logmelspect_datasets(
@@ -102,6 +107,14 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             for shard_idx in range(num_shards):
                 shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
                 shard_datasets = shard_datasets.map(self.raw_to_logmelspect, num_proc=self.num_proc, with_indices=True)
+                cache_file_name = get_cache_file_path(target_dataset_dir, self.spec_augmentation, "train")
+                shard_datasets.map(self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc)
+                set_cache_log(
+                    dataset_dir=target_dataset_dir,
+                    num_proc=self.num_proc,
+                    cache_task_func=self.spec_augmentation,
+                    train_type="train",
+                )
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
 
     def prepare_data(self):
@@ -128,43 +141,34 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # stage must like {fit,validate,test,predict}
         if stage == "fit":
             self.train_datasets = get_concat_dataset([self.pl_data_dir], "train")
-            if self.spec_augment:
-                if self.trainer.is_global_zero:
-                    # main process에서 1회만 수행하도록 처리
-                    cache_file_name = get_cache_file_path(self.pl_data_dir, self.spec_augmentation, "train")
-                    self.train_datasets = self.train_datasets.map(
-                        self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
-                    )
-                    set_cache_log(
-                        dataset_dir=self.pl_data_dir,
-                        num_proc=self.num_proc,
-                        cache_task_func=self.spec_augmentation,
-                        train_type="train",
-                    )
-            self.train_datasets = self.train_datasets.set_format("torch")
+            self.train_datasets.set_format("torch")
             self.val_datasets = get_concat_dataset([self.pl_data_dir], "dev")
-            self.val_datasets = self.val_datasets.set_format("torch")
+            self.val_datasets.set_format("torch")
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test":
             self.clean_datasets = get_concat_dataset([self.pl_data_dir], "eval_clean")
-            self.clean_datasets = self.clean_datasets.set_format("torch")
+            self.clean_datasets.set_format("torch")
             self.other_datasets = get_concat_dataset([self.pl_data_dir], "eval_other")
-            self.other_datasets = self.other_datasets.set_format("torch")
+            self.other_datasets.set_format("torch")
 
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
-        return AudioDataLoader(self.train_datasets, batch_size=self.per_device_train_batch_size)
+        return AudioDataLoader(
+            dataset=self.train_datasets, batch_size=self.per_device_train_batch_size, pad_token_id=self.pad_token_id
+        )
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
-        return AudioDataLoader(self.val_datasets, batch_size=self.per_device_eval_batch_size)
+        return AudioDataLoader(
+            dataset=self.val_datasets, batch_size=self.per_device_eval_batch_size, pad_token_id=self.pad_token_id
+        )
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
         return [
-            AudioDataLoader(self.clean_datasets, batch_size=1),
-            AudioDataLoader(self.other_datasets, batch_size=1),
+            AudioDataLoader(dataset=self.clean_datasets, batch_size=1, pad_token_id=self.pad_token_id),
+            AudioDataLoader(dataset=self.other_datasets, batch_size=1, pad_token_id=self.pad_token_id),
         ]
 
     def predict_dataloader(self):

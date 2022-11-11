@@ -34,7 +34,10 @@
             "spec_augment": true,
             "n_mels": 80,
             "time_mask_para": 40,
-            "freq_mask_para": 20
+            "freq_mask_para": 20,
+            "time_mask_cnt": 1,
+            "freq_mask_cnt": 1,
+            "pad_token_id": 0
         },
         "text": {}
     }
