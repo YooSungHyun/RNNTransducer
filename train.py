@@ -7,7 +7,7 @@ import argparse
 import collections
 import scipy
 import random
-from utils import get_concat_dataset, comfy
+from utils import get_concat_dataset, read_json
 from pytorch_lightning import Trainer
 from model import RNNTransducer
 from datamodule import RNNTransducerDataModule
@@ -26,8 +26,8 @@ def main(hparams):
     # Trainer의 초기화가 from_argparse_args에서 hparams의 dict key, value 쌍으로 이루어지므로, 이렇게 구동하여도 문제는 없다. (개발자 가이드에도 제안되는 방법임)
     hparams.strategy = DDPStrategy(timeout=timedelta(days=30))
 
-    model_config_dict = comfy.read_json(hparams.model_config)["model"]
-    data_config_dict = comfy.read_json(hparams.model_config)["data"]
+    model_config_dict = read_json(hparams.model_config)["model"]
+    data_config_dict = read_json(hparams.model_config)["data"]
 
     RNNT_datamodule = RNNTransducerDataModule(data_config_dict, hparams)
     # (원문이 재밌어서 그대로 따옴) There are no .cuda() or .to(device) calls required. Lightning does these for you.
