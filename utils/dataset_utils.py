@@ -3,7 +3,6 @@ from typing import List
 from datasets import Dataset, concatenate_datasets, load_from_disk
 from tqdm import tqdm
 import json
-from .comfy import mkdir
 from collections import defaultdict
 
 
@@ -77,6 +76,14 @@ def get_concat_dataset(dataset_dirs: List[os.PathLike], train_type: str) -> Data
                         cache_file_name=os.path.join(dataset_dir, postprocess_log["filter"][train_type]["path"]),
                         num_proc=int(postprocess_log["filter"][train_type]["num_proc"]),
                     )
+            if "spec_augmentation" in postprocess_log.keys():
+                if train_type in postprocess_log["spec_augmentation"].keys():
+                    postprocess_dataset = postprocess_dataset.map(
+                        cache_file_name=os.path.join(
+                            dataset_dir, postprocess_log["spec_augmentation"][train_type]["path"]
+                        ),
+                        num_proc=int(postprocess_log["spec_augmentation"][train_type]["num_proc"]),
+                    )
         dataset_lists.append(postprocess_dataset)
     concat_dataset = concatenate_datasets(dataset_lists)
     return concat_dataset
@@ -86,9 +93,7 @@ def get_cache_file_path(cache_dir: str, cache_task_func: callable, train_type: s
     if cache_dir is None:
         return None
     else:
-        mkdir(cache_dir)
-        mkdir(os.path.join(cache_dir, cache_task_func.__name__))
-        mkdir(os.path.join(cache_dir, cache_task_func.__name__, train_type))
+        os.makedirs(os.path.join(cache_dir, cache_task_func.__name__, train_type), exist_ok=True)
         return os.path.join(cache_dir, cache_task_func.__name__, train_type, "cache.arrow")
 
 
