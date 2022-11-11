@@ -16,6 +16,8 @@ class RNNTransducer(pl.LightningModule):
     the output symbols are the characters of the alphabet.
     """
 
+    # 호출순서
+    # datamodule setup 끝 -> configure_optimizers -> dataloader(collate_fn)
     def __init__(self, prednet_params: dict, transnet_params: dict, jointnet_params: dict, args: Namespace):
         super().__init__()
         self.transnet = AudioTransNet(**transnet_params)
@@ -93,20 +95,43 @@ class RNNTransducer(pl.LightningModule):
         return logits
 
     def training_step(self, batch, batch_idx, hiddens):
-        x, y = batch
+        input_values, labels = batch
         # flatten any input
-        x = x.view(x.size(0), -1)
-        y_hat = self(x)
+        input_values = input_values.view(input_values.size(0), -1)
+        logits = self(input_values)
         # the training step must be updated to accept a ``hiddens`` argument
         # hiddens are the hiddens from the previous truncated backprop step
         out, hiddens = self.lstm(data, hiddens)
         return {"loss": ..., "hiddens": hiddens}
+
+    @property
+    def num_training_steps(self) -> int:
+        """Total training steps inferred from datamodule and devices."""
+        if self.trainer.max_steps > 0:
+            return self.trainer.max_steps
+
+        limit_batches = self.trainer.limit_train_batches
+        batches = len(self.trainer.datamodule.train_dataloader())
+        batches = min(batches, limit_batches) if isinstance(limit_batches, int) else int(limit_batches * batches)
+
+        num_devices = max(1, self.trainer.num_devices)
+
+        effective_accum = self.trainer.accumulate_grad_batches * num_devices
+        return (batches // effective_accum) * self.trainer.max_epochs
+
+    @property
+    def steps_per_epoch(self) -> int:
+        return self.num_training_steps // self.trainer.max_epochs
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.args.learning_rate, weight_decay=self.args.weight_decay
         )
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=self.args.max_lr, epochs=self.args.max_epochs, pct_start=0.2
+            optimizer,
+            max_lr=self.args.max_lr,
+            steps_per_epoch=self.steps_per_epoch,
+            epochs=self.args.max_epochs,
+            pct_start=0.2,
         )
         return [optimizer], [scheduler]
