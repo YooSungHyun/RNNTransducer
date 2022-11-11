@@ -1,13 +1,13 @@
 import os
 import torch
 import pytorch_lightning as pl
-from utils import get_concat_dataset, get_cache_file_path
-from torch.utils.data import DataLoader
+from utils import get_concat_dataset, get_cache_file_path, set_cache_log
 from torchaudio.transforms import MelSpectrogram, TimeMasking, FrequencyMasking
 import matplotlib.pyplot as plt
 import numpy as np
 from argparse import Namespace
 from datasets import Dataset
+from dataloader import AudioDataLoader
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -28,7 +28,6 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.per_device_train_batch_size = args.per_device_train_batch_size
         self.per_device_eval_batch_size = args.per_device_eval_batch_size
         self.num_proc = args.num_proc
-        self.cache_dir = args.cache_dir
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
         self.sample_rate = config["audio"]["sample_rate"]
@@ -70,7 +69,9 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def spec_augmentation(self, batch):
         torch.random.manual_seed(self.seed)
-        freq_mask_data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(batch["input_values"])
+        freq_mask_data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(
+            torch.FloatTensor(batch["input_values"])
+        )
         freq_time_mask_data = TimeMasking(time_mask_param=self.time_mask_para)(freq_mask_data)
         batch["input_values"] = freq_time_mask_data
         return batch
@@ -98,15 +99,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             else:
                 num_shards = 1
 
-            dataset_lists = []
             for shard_idx in range(num_shards):
                 shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
-                cache_file_name = get_cache_file_path(self.cache_dir, self.raw_to_logmelspect, self.num_proc)
-                shard_datasets = shard_datasets.map(
-                    self.raw_to_logmelspect, cache_file_name=cache_file_name, num_proc=self.num_proc, with_indices=True
-                )
+                shard_datasets = shard_datasets.map(self.raw_to_logmelspect, num_proc=self.num_proc, with_indices=True)
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
-                dataset_lists.append(shard_datasets)
 
     def prepare_data(self):
         # prepare에서는 병렬처리 복잡도를 낮추고, 혹은 병렬처리 시 데이터가 손상될 위협을 방지하기위해 단일 CPU 프로세스로만 진행이 됩니다. (다중노드에서 사용하려면, prepare_data_per_node를 참고)
@@ -131,36 +127,44 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # 모든 데이터셋을 한번에 읽어올 필요가 없다면, stage를 pass하거나 None으로 정의하십시오. (아마 콜레터를 쓰거나, train, test step에서 하고싶을 수 있으니까?)
         # stage must like {fit,validate,test,predict}
         if stage == "fit":
-            self.train_datasets = get_concat_dataset(self.pl_data_dir, "train")
+            self.train_datasets = get_concat_dataset([self.pl_data_dir], "train")
             if self.spec_augment:
-                cache_file_name = get_cache_file_path(self.cache_dir, self.spec_augmentation, self.num_proc)
-                self.train_datasets = self.train_datasets.map(
-                    self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
-                )
+                if self.trainer.is_global_zero:
+                    # main process에서 1회만 수행하도록 처리
+                    cache_file_name = get_cache_file_path(self.pl_data_dir, self.spec_augmentation, "train")
+                    self.train_datasets = self.train_datasets.map(
+                        self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
+                    )
+                    set_cache_log(
+                        dataset_dir=self.pl_data_dir,
+                        num_proc=self.num_proc,
+                        cache_task_func=self.spec_augmentation,
+                        train_type="train",
+                    )
             self.train_datasets = self.train_datasets.set_format("torch")
-            self.val_datasets = get_concat_dataset(self.pl_data_dir, "dev")
+            self.val_datasets = get_concat_dataset([self.pl_data_dir], "dev")
             self.val_datasets = self.val_datasets.set_format("torch")
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test":
-            self.clean_datasets = get_concat_dataset(self.pl_data_dir, "eval_clean")
+            self.clean_datasets = get_concat_dataset([self.pl_data_dir], "eval_clean")
             self.clean_datasets = self.clean_datasets.set_format("torch")
-            self.other_datasets = get_concat_dataset(self.pl_data_dir, "eval_other")
+            self.other_datasets = get_concat_dataset([self.pl_data_dir], "eval_other")
             self.other_datasets = self.other_datasets.set_format("torch")
 
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
-        return DataLoader(self.train_datasets, batch_size=self.per_device_train_batch_size)
+        return AudioDataLoader(self.train_datasets, batch_size=self.per_device_train_batch_size)
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
-        return DataLoader(self.val_datasets, batch_size=self.per_device_eval_batch_size)
+        return AudioDataLoader(self.val_datasets, batch_size=self.per_device_eval_batch_size)
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
         return [
-            DataLoader(self.clean_datasets, batch_size=1),
-            DataLoader(self.other_datasets, batch_size=1),
+            AudioDataLoader(self.clean_datasets, batch_size=1),
+            AudioDataLoader(self.other_datasets, batch_size=1),
         ]
 
     def predict_dataloader(self):

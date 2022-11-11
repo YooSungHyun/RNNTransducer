@@ -3,6 +3,8 @@ from typing import List
 from datasets import Dataset, concatenate_datasets, load_from_disk
 from tqdm import tqdm
 import json
+from .comfy import mkdir
+from collections import defaultdict
 
 
 def get_dataset_paths(dataset_dir: os.PathLike, train_type: str) -> List[os.PathLike]:
@@ -80,8 +82,31 @@ def get_concat_dataset(dataset_dirs: List[os.PathLike], train_type: str) -> Data
     return concat_dataset
 
 
-def get_cache_file_path(cache_dir: str, cache_task_func: callable, num_proc: int) -> str:
+def get_cache_file_path(cache_dir: str, cache_task_func: callable, train_type: str) -> str:
     if cache_dir is None:
         return None
     else:
-        return os.path.join(cache_dir, cache_task_func.__name__, str(num_proc))
+        mkdir(cache_dir)
+        mkdir(os.path.join(cache_dir, cache_task_func.__name__))
+        mkdir(os.path.join(cache_dir, cache_task_func.__name__, train_type))
+        return os.path.join(cache_dir, cache_task_func.__name__, train_type, "cache.arrow")
+
+
+def set_cache_log(dataset_dir: str, num_proc: int, cache_task_func: callable, train_type: str):
+    postprocess_log_path = os.path.join(dataset_dir, "postprocess_log.json")
+    result_dict = defaultdict()
+    history_dict = dict()
+    if os.path.isfile(postprocess_log_path):
+        # 이미 진행됐던 캐시가 있다면, postprocess_log.json이 존재할 것이다. 읽어서 만약 중복된다면 더 이상 진행 안함
+        with open(postprocess_log_path, "r") as history_file:
+            history_dict = json.load(history_file)
+        if cache_task_func.__name__ in history_dict.keys():
+            print(f"이미 {cache_task_func.__name__} 캐시가 존재합니다!! 스킵됩니다!")
+            return
+    # 파일은 있는데 중복되는게 없거나, 아예 파일이 없는경우
+    result_dict[train_type] = dict()
+    result_dict[train_type]["num_proc"] = num_proc
+    result_dict[train_type]["path"] = cache_task_func.__name__ + "/" + train_type + "/" + "cache.arrow"
+    history_dict[cache_task_func.__name__] = result_dict
+    with open(postprocess_log_path, "w") as history_file:
+        json.dump(history_dict, history_file, indent=4)
