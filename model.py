@@ -1,10 +1,10 @@
 import torch
 from torch import Tensor
 import pytorch_lightning as pl
-from torchaudio import functional as F
-import numpy as np
 from networks import AudioTransNet, TextPredNet, JointNet
 from argparse import Namespace
+from warprnnt_pytorch import RNNTLoss
+import torchmetrics.functional as metric_f
 
 
 class RNNTransducer(pl.LightningModule):
@@ -20,10 +20,11 @@ class RNNTransducer(pl.LightningModule):
     # datamodule setup 끝 -> configure_optimizers -> dataloader(collate_fn)
     def __init__(self, prednet_params: dict, transnet_params: dict, jointnet_params: dict, args: Namespace):
         super().__init__()
+        self.args = args
         self.transnet = AudioTransNet(**transnet_params)
         self.prednet = TextPredNet(**prednet_params)
         self.jointnet = JointNet(**jointnet_params)
-        self.args = args
+        self.rnnt_loss = RNNTLoss(blank=prednet_params["pad_token_id"], reduction="mean")
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
         # Important: This property activates truncated backpropagation through time
         # Setting this value to 2 splits the batch into sequences of size 2
@@ -97,6 +98,7 @@ class RNNTransducer(pl.LightningModule):
         enc_state, enc_hidden_states = self.transnet(inputs, inputs_lengths, enc_hiddens)
         dec_state, dec_hidden_states = self.prednet(targets_add_blank, targets_lengths + 1, dec_hiddens)
         logits = self.jointnet(enc_state, dec_state)
+        # TODO Hidden State를 concat을 시켜야할까? (토치 라이트닝에 각각의 2개 네트워크에 대한 bptt 전략이 없다.)
         return logits, (enc_hidden_states, dec_hidden_states)
 
     def training_step(self, batch, batch_idx, optimizer_idx, hiddens):
@@ -112,12 +114,31 @@ class RNNTransducer(pl.LightningModule):
         input_values, labels, seq_lengths, target_lengths = batch
         inputs_lengths = torch.IntTensor(seq_lengths)
         targets_lengths = torch.IntTensor(target_lengths)
+        # None, None으로 던지면 알아서 init 수행함
         hiddens = (None, None)
         logits, enc_dec_hiddens = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
-        
+        loss = self.rnnt_loss(logits, labels, inputs_lengths, targets_lengths)
+
+        # sync_dist를 선언하는 것으로 ddp의 4장비에서 계산된 loss의 평균치를 async로 불러오도록 한다. (log할때만 집계됨)
+        self.log("train_loss_step", loss, sync_dist=True)
         # the training step must be updated to accept a ``hiddens`` argument
         # hiddens are the hiddens from the previous truncated backprop step
-        return {"loss": ..., "hiddens": enc_dec_hiddens}
+        return {"loss": loss, "hiddens": enc_dec_hiddens}
+
+    def validation_step(self, batch, batch_idx):
+        input_values, labels, seq_lengths, target_lengths = batch
+        inputs_lengths = torch.IntTensor(seq_lengths)
+        targets_lengths = torch.IntTensor(target_lengths)
+        hiddens = (None, None)
+        logits, _ = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
+
+        return {"preds": logits, "labels": labels}
+        # torchmetrics를 사용하는 경우, DistributedSampler가 각각 장비에서 동작하는 것으로 발생할 수 있는 비동기 문제에서 자유로워진다. (https://torchmetrics.readthedocs.io/en/stable/)
+        # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
+        wer = metric_f.word_error_rate(preds, target)
+        cer = metric_f.word_error_rate(preds, target)
+        self.log("WER", wer)
+        self.log("CER", cer)
 
     @property
     def num_training_steps(self) -> int:

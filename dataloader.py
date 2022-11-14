@@ -1,4 +1,5 @@
 import torch
+from torch.nn.utils.rnn import pad_sequence
 
 
 class AudioDataLoader(torch.utils.data.DataLoader):
@@ -25,10 +26,8 @@ class AudioDataLoader(torch.utils.data.DataLoader):
         feat_size = self.n_mels
         batch_size = len(batch)
 
-        input_values = torch.zeros(batch_size, max_seq_size, feat_size)
-
+        input_values = pad_sequence(batch["input_values"], batch_first=True, padding_value=self.pad_token_id)
         labels = torch.zeros(batch_size, max_target_size).to(torch.long)
-        labels.fill_(self.pad_token_id)
 
         for batch_idx in range(batch_size):
             sample = batch[batch_idx]

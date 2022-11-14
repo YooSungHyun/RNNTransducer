@@ -34,10 +34,13 @@ class JointNet(nn.Module):
         * predictions (torch.FloatTensor): Result of model predictions.
     """
 
-    def __init__(self, num_classes: int, input_size: int):
+    def __init__(self, num_classes: int, input_size: int, forward_output_size: int):
         super(JointNet, self).__init__()
         self.num_classes = num_classes
-        self.fc = nn.Linear(input_size, num_classes, bias=False)
+        self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
+        self.gelu = nn.GELU(approximate="tanh")
+
+        self.fc = nn.Linear(forward_output_size, num_classes, bias=False)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
         """
@@ -56,13 +59,17 @@ class JointNet(nn.Module):
             input_length = encoder_outputs.size(1)
             target_length = decoder_outputs.size(1)
 
-            encoder_outputs = encoder_outputs.unsqueeze(2)
-            decoder_outputs = decoder_outputs.unsqueeze(1)
+            encoder_outputs = encoder_outputs.unsqueeze(1)
+            decoder_outputs = decoder_outputs.unsqueeze(2)
 
             encoder_outputs = encoder_outputs.repeat([1, 1, target_length, 1])
             decoder_outputs = decoder_outputs.repeat([1, input_length, 1, 1])
 
         outputs = torch.cat((encoder_outputs, decoder_outputs), dim=-1)
+        # forward_layer는 논문에서 다뤄지는 내용은 아니나, 두개를 concat하면 길어지니, 예측에 중요한 특성을 한번 더 필터링 하기 위함
+        outputs = self.forward_layer(outputs)
+        # 마이너스로 많이 가는 값이 있으면 tanh가 더 안정적일 수 있음, 다만 tanh 근사 시키기때문에 gelu도 잘되지 않을까 판단해봄.
+        outputs = self.gelu(outputs)
         outputs = self.fc(outputs)
 
         return outputs

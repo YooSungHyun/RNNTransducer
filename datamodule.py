@@ -135,9 +135,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             )
 
             if train_type == "train":
-                datasets = get_concat_dataset([target_dataset_dir], train_type)
                 cache_file_name = get_cache_file_path(target_dataset_dir, spec_aug_task_name, train_type)
-                datasets.map(self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc)
+                datasets = datasets.map(
+                    self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
+                )
                 set_cache_log(
                     dataset_dir=target_dataset_dir,
                     num_proc=self.num_proc,
@@ -147,7 +148,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
             cache_file_name = get_cache_file_path(self.pl_data_dir, transpose_task_name, train_type)
             datasets = datasets.map(
-                lambda batch: {"input_values": torch.transpose(batch["input_values"][0], 0, 1)},
+                lambda batch: {"input_values": np.transpose(batch["input_values"][0])},
                 cache_file_name=cache_file_name,
                 num_proc=self.num_proc,
             )
@@ -157,7 +158,6 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 cache_task_func_name=transpose_task_name,
                 train_type=train_type,
             )
-            datasets.set_format("numpy")
             for shard_idx in range(num_shards):
                 shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
