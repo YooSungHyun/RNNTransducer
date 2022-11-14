@@ -76,28 +76,26 @@ def get_concat_dataset(dataset_dirs: List[os.PathLike], train_type: str) -> Data
                         cache_file_name=os.path.join(dataset_dir, postprocess_log["filter"][train_type]["path"]),
                         num_proc=int(postprocess_log["filter"][train_type]["num_proc"]),
                     )
-            if "spec_augmentation" in postprocess_log.keys():
-                if train_type in postprocess_log["spec_augmentation"].keys():
+            elif "map" in postprocess_log.keys():
+                if train_type in postprocess_log["map"].keys():
                     postprocess_dataset = postprocess_dataset.map(
-                        cache_file_name=os.path.join(
-                            dataset_dir, postprocess_log["spec_augmentation"][train_type]["path"]
-                        ),
-                        num_proc=int(postprocess_log["spec_augmentation"][train_type]["num_proc"]),
+                        cache_file_name=os.path.join(dataset_dir, postprocess_log["map"][train_type]["path"]),
+                        num_proc=int(postprocess_log["map"][train_type]["num_proc"]),
                     )
         dataset_lists.append(postprocess_dataset)
     concat_dataset = concatenate_datasets(dataset_lists)
     return concat_dataset
 
 
-def get_cache_file_path(cache_dir: str, cache_task_func: callable, train_type: str) -> str:
+def get_cache_file_path(cache_dir: str, cache_task_func_name: str, train_type: str) -> str:
     if cache_dir is None:
         return None
     else:
-        os.makedirs(os.path.join(cache_dir, cache_task_func.__name__, train_type), exist_ok=True)
-        return os.path.join(cache_dir, cache_task_func.__name__, train_type, "cache.arrow")
+        os.makedirs(os.path.join(cache_dir, cache_task_func_name, train_type), exist_ok=True)
+        return os.path.join(cache_dir, cache_task_func_name, train_type, "cache.arrow")
 
 
-def set_cache_log(dataset_dir: str, num_proc: int, cache_task_func: callable, train_type: str):
+def set_cache_log(dataset_dir: str, num_proc: int, cache_task_func_name: str, train_type: str):
     postprocess_log_path = os.path.join(dataset_dir, "postprocess_log.json")
     result_dict = defaultdict()
     history_dict = dict()
@@ -105,13 +103,13 @@ def set_cache_log(dataset_dir: str, num_proc: int, cache_task_func: callable, tr
         # 이미 진행됐던 캐시가 있다면, postprocess_log.json이 존재할 것이다. 읽어서 만약 중복된다면 더 이상 진행 안함
         with open(postprocess_log_path, "r") as history_file:
             history_dict = json.load(history_file)
-        if cache_task_func.__name__ in history_dict.keys():
-            print(f"이미 {cache_task_func.__name__} 캐시가 존재합니다!! 스킵됩니다!")
+        if cache_task_func_name in history_dict.keys():
+            print(f"이미 {cache_task_func_name} 캐시가 존재합니다!! 스킵됩니다!")
             return
     # 파일은 있는데 중복되는게 없거나, 아예 파일이 없는경우
     result_dict[train_type] = dict()
     result_dict[train_type]["num_proc"] = num_proc
-    result_dict[train_type]["path"] = cache_task_func.__name__ + "/" + train_type + "/" + "cache.arrow"
-    history_dict[cache_task_func.__name__] = result_dict
+    result_dict[train_type]["path"] = cache_task_func_name + "/" + train_type + "/" + "cache.arrow"
+    history_dict[cache_task_func_name] = result_dict
     with open(postprocess_log_path, "w") as history_file:
         json.dump(history_dict, history_file, indent=4)
