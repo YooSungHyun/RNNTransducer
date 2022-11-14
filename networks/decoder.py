@@ -86,7 +86,7 @@ class TextPredNet(nn.Module):
         self,
         inputs: Tensor,
         input_lengths: Tensor = None,
-        hidden_states: Tensor = None,
+        prev_hidden_state: Tensor = None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward propage a `inputs` (targets) for training.
@@ -94,7 +94,7 @@ class TextPredNet(nn.Module):
         Args:
             inputs (torch.LongTensor): A target sequence passed to decoder. `IntTensor` of size ``(batch, seq_length)``
             input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
-            hidden_states (torch.FloatTensor): A previous hidden state of decoder. `FloatTensor` of size
+            pred_hidden_state (torch.FloatTensor): A previous hidden state of decoder. `FloatTensor` of size
                 ``(batch, seq_length, dimension)``
 
         Returns:
@@ -109,11 +109,11 @@ class TextPredNet(nn.Module):
 
         if input_lengths is not None:
             embedded = nn.utils.rnn.pack_padded_sequence(embedded.transpose(0, 1), input_lengths.cpu())
-            outputs, hidden_states = self.rnn(embedded, hidden_states)
+            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
             outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
             outputs = self.out_proj(outputs.transpose(0, 1))
         else:
-            outputs, hidden_states = self.rnn(embedded, hidden_states)
+            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
             outputs = self.out_proj(outputs)
 
         return outputs, hidden_states

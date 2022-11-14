@@ -75,7 +75,7 @@ class AudioTransNet(nn.Module):
         )
         self.out_proj = nn.Linear(hidden_size << 1 if bidirectional else hidden_size, output_size)
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor, input_lengths: Tensor, prev_hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` for  encoder training.
 
@@ -83,16 +83,22 @@ class AudioTransNet(nn.Module):
             inputs (torch.FloatTensor): A input sequence passed to encoder. Typically for inputs this will be a padded
                 `FloatTensor` of size ``(batch, seq_length, dimension)``.
             input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
+            pred_hidden_state (torch.FloatTensor): A previous hidden state of encoder. `FloatTensor` of size
+                ``(batch, seq_length, dimension)``
 
         Returns:
             (Tensor, Tensor)
 
             * outputs (torch.FloatTensor): A output sequence of encoder. `FloatTensor` of size
                 ``(batch, seq_length, dimension)``
-            * output_lengths (torch.LongTensor): The length of output tensor. ``(batch)``
+            * hidden_state (torch.LongTensor): The length of output tensor. ``(batch)``
         """
         inputs = nn.utils.rnn.pack_padded_sequence(inputs.transpose(0, 1), input_lengths.cpu())
-        outputs, hidden_states = self.rnn(inputs)
+        outputs, hidden_states = self.rnn(inputs, prev_hidden_state)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
         outputs = self.out_proj(outputs.transpose(0, 1))
-        return outputs, input_lengths
+        """
+        For bidirectional RNNs, forward and backward are directions 0 and 1 respectively.
+        Example of splitting the output layers when batch_first=False: output.view(seq_len, batch, num_directions, hidden_size).
+        """
+        return outputs, hidden_states
