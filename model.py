@@ -85,24 +85,39 @@ class RNNTransducer(pl.LightningModule):
 
         return outputs
 
-    def forward(self, inputs, inputs_lengths, targets, targets_lengths):
+    def forward(self, inputs, targets, inputs_lengths, targets_lengths, hiddens):
+        enc_hiddens = hiddens[0]
+        dec_hiddens = hiddens[1]
         # Use for inference only (separate from training_step)
+        # labels의 dim을 2차원으로 배치만큼 세움
         zero = torch.zeros((targets.shape[0], 1)).long()
+        # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
         targets_add_blank = torch.cat((zero, targets), dim=1)
-        enc_state, _ = self.transnet(inputs, inputs_lengths)
-        dec_state, _ = self.prednet(targets_add_blank, targets_lengths + 1)
-        logits = self.jointnet(enc_state, dec_state)
-        return logits
 
-    def training_step(self, batch, batch_idx, hiddens):
-        input_values, labels = batch
-        # flatten any input
-        input_values = input_values.view(input_values.size(0), -1)
-        logits = self(input_values)
+        enc_state, enc_hidden_states = self.transnet(inputs, inputs_lengths, enc_hiddens)
+        dec_state, dec_hidden_states = self.prednet(targets_add_blank, targets_lengths + 1, dec_hiddens)
+        logits = self.jointnet(enc_state, dec_state)
+        return logits, (enc_hidden_states, dec_hidden_states)
+
+    def training_step(self, batch, batch_idx, optimizer_idx, hiddens):
+        """
+        If the following conditions are satisfied:
+        1) cudnn is enabled,
+        2) input data is on the GPU
+        3) input data has dtype torch.float16
+        4) V100 GPU is used,
+        5) input data is not in PackedSequence format persistent algorithm
+        can be selected to improve performance.
+        """
+        input_values, labels, seq_lengths, target_lengths = batch
+        inputs_lengths = torch.IntTensor(seq_lengths)
+        targets_lengths = torch.IntTensor(target_lengths)
+        hiddens = (None, None)
+        logits, enc_dec_hiddens = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
+        
         # the training step must be updated to accept a ``hiddens`` argument
         # hiddens are the hiddens from the previous truncated backprop step
-        out, hiddens = self.lstm(data, hiddens)
-        return {"loss": ..., "hiddens": hiddens}
+        return {"loss": ..., "hiddens": enc_dec_hiddens}
 
     @property
     def num_training_steps(self) -> int:
