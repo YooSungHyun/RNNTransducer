@@ -61,15 +61,17 @@ class TextPredNet(nn.Module):
         output_size: int,
         num_layers: int,
         rnn_type: str = "lstm",
+        pad_token_id: int = 0,
         bos_token_id: int = 2,
         eos_token_id: int = 3,
         dropout: float = 0.2,
     ):
         super(TextPredNet, self).__init__()
         self.hidden_size = hidden_size
+        self.pad_token_id = pad_token_id
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
-        self.embedding = nn.Embedding(embedding_size, hidden_size)
+        self.embedding = nn.Embedding(embedding_size, hidden_size, padding_idx=self.pad_token_id)
         rnn_cell = self.supported_rnns[rnn_type.lower()]
         self.rnn = rnn_cell(
             input_size=hidden_size,
@@ -86,7 +88,7 @@ class TextPredNet(nn.Module):
         self,
         inputs: Tensor,
         input_lengths: Tensor = None,
-        hidden_states: Tensor = None,
+        prev_hidden_state: Tensor = None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward propage a `inputs` (targets) for training.
@@ -94,7 +96,7 @@ class TextPredNet(nn.Module):
         Args:
             inputs (torch.LongTensor): A target sequence passed to decoder. `IntTensor` of size ``(batch, seq_length)``
             input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
-            hidden_states (torch.FloatTensor): A previous hidden state of decoder. `FloatTensor` of size
+            pred_hidden_state (torch.FloatTensor): A previous hidden state of decoder. `FloatTensor` of size
                 ``(batch, seq_length, dimension)``
 
         Returns:
@@ -108,12 +110,15 @@ class TextPredNet(nn.Module):
         embedded = self.embedding(inputs)
 
         if input_lengths is not None:
-            embedded = nn.utils.rnn.pack_padded_sequence(embedded.transpose(0, 1), input_lengths.cpu())
-            outputs, hidden_states = self.rnn(embedded, hidden_states)
-            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
-            outputs = self.out_proj(outputs.transpose(0, 1))
+            embedded = nn.utils.rnn.pack_padded_sequence(
+                embedded, input_lengths, batch_first=True, enforce_sorted=True
+            )
+            self.rnn.flatten_parameters()
+            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
+            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True, total_length=inputs.size(1))
         else:
-            outputs, hidden_states = self.rnn(embedded, hidden_states)
-            outputs = self.out_proj(outputs)
+            self.rnn.flatten_parameters()
+            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
+        outputs = self.out_proj(outputs)
 
         return outputs, hidden_states

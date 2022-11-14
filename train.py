@@ -1,13 +1,7 @@
-import os
 import torch
-from torch import nn
-import torch.nn.functional as F
-import pytorch_lightning as pl
 import argparse
-import collections
-import scipy
 import random
-from utils import get_concat_dataset, read_json
+from utils import read_json, str2bool
 from pytorch_lightning import Trainer
 from model import RNNTransducer
 from datamodule import RNNTransducerDataModule
@@ -61,10 +55,23 @@ if __name__ == "__main__":
         help="The batch size per GPU/TPU core/CPU for training.",
     )
     parser.add_argument(
+        "--train_batch_drop_last",
+        default=False,
+        type=str2bool,
+        help="The batch size per GPU/TPU core/CPU for training.",
+    )
+
+    parser.add_argument(
         "--per_device_eval_batch_size",
         default=1,
         type=int,
         help="The batch size per GPU/TPU core/CPU for evaluation.",
+    )
+    parser.add_argument(
+        "--eval_batch_drop_last",
+        default=False,
+        type=str2bool,
+        help="The batch size per GPU/TPU core/CPU for training.",
     )
     args = parser.parse_args()
     main(args)

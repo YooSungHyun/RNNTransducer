@@ -52,9 +52,6 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         hop_length = int(self.sample_rate * self.window_stride_sec)
 
         raw_audio = torch.FloatTensor([batch["input_values"]])
-        if self.normalize:
-            # HuggingFace Style MeanVarNorm
-            raw_audio = (raw_audio - raw_audio.mean()) / torch.sqrt(raw_audio.var() + 1e-7)
 
         # log_mel spec (channel(mono(1), 2~3 etc), n_mels, time)
         mel_spect = MelSpectrogram(
@@ -72,49 +69,97 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def spec_augmentation(self, batch):
         # torch.random.manual_seed(self.seed)
+        # data shape: (channel, mel, seq)
         data = torch.FloatTensor(batch["input_values"])
 
         for _ in range(self.freq_mask_cnt):
             data = FrequencyMasking(freq_mask_param=self.freq_mask_para)(data)
         for _ in range(self.time_mask_cnt):
             data = TimeMasking(time_mask_param=self.time_mask_para)(data)
+        # input_values shape: (channel, mel, seq)
         batch["input_values"] = data
         return batch
 
-    def __save_raw_to_logmelspect_datasets(
-        self, source_dataset_dir: str, target_dataset_dir: str, train_type: str
+    def mean_var_norm(self, batch):
+        data = np.array(batch["input_values"])
+        batch["input_values"] = np.array([(data - data.mean()) / np.sqrt(data.var() + 1e-7)])[0]
+        return batch
+
+    def save_raw_to_logmelspect_datasets(
+        self, source_dataset_dirs: list[str], target_dataset_dir: str, train_type: str
     ) -> Dataset:
         """
         기존에 raw로 저장해놓은 huggingface datasets를 불러와, log melspectrogram 형태로 map합니다. \n
         이미 log melspectrogram datasets가 있다면, 기존 것을 가져다 씁니다. \n
         성공 시, datasets를 shard하여 저장하고, 전체 datasets을 return합니다.
         """
-        assert source_dataset_dir is not None, "log mel로 변환할 data source 경로가 없습니다!"
-        assert target_dataset_dir is not None, "log mel을 저장할 data target 경로가 없습니다!"
+        assert source_dataset_dirs, "log mel로 변환할 data source 경로가 없습니다!"
+        assert target_dataset_dir, "log mel을 저장할 data target 경로가 없습니다!"
 
         print("check dir: ", os.path.join(target_dataset_dir, train_type))
         if os.path.isdir(os.path.join(target_dataset_dir, train_type)):
             # target이 이미 존재하면, 새로 만들지 않고, 불러옵니다.
             print(f"이미 datasets이 존재합니다. {train_type} save과정은 스킵됩니다!!!")
         else:
-            datasets = get_concat_dataset(source_dataset_dir, train_type)
+            datasets = get_concat_dataset(source_dataset_dirs, train_type)
 
             if train_type == "train":
                 num_shards = self.num_shards
             else:
                 num_shards = 1
 
-            for shard_idx in range(num_shards):
-                shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
-                shard_datasets = shard_datasets.map(self.raw_to_logmelspect, num_proc=self.num_proc, with_indices=True)
-                cache_file_name = get_cache_file_path(target_dataset_dir, self.spec_augmentation, "train")
-                shard_datasets.map(self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc)
+            if self.normalize:
+                normalize_task_name = "normalize"
+                spec_aug_task_name = "norm_spec_augmentation"
+                transpose_task_name = "norm_transpose"
+                for source_dataset_dir in source_dataset_dirs:
+                    cache_file_name = get_cache_file_path(source_dataset_dir, normalize_task_name, train_type)
+                    # HuggingFace Style MeanVarNorm
+                    datasets = datasets.map(
+                        self.mean_var_norm, cache_file_name=cache_file_name, num_proc=self.num_proc
+                    )
+                    set_cache_log(
+                        dataset_dir=source_dataset_dir,
+                        num_proc=self.num_proc,
+                        cache_task_func_name=normalize_task_name,
+                        train_type=train_type,
+                    )
+            else:
+                spec_aug_task_name = "spec_augmentation"
+                transpose_task_name = "transpose"
+            datasets = datasets.map(
+                self.raw_to_logmelspect,
+                num_proc=self.num_proc,
+                with_indices=True,
+                remove_columns=["length", "syllabel_labels"],
+            )
+
+            if train_type == "train":
+                cache_file_name = get_cache_file_path(target_dataset_dir, spec_aug_task_name, train_type)
+                datasets = datasets.map(
+                    self.spec_augmentation, cache_file_name=cache_file_name, num_proc=self.num_proc
+                )
                 set_cache_log(
                     dataset_dir=target_dataset_dir,
                     num_proc=self.num_proc,
-                    cache_task_func=self.spec_augmentation,
-                    train_type="train",
+                    cache_task_func_name=spec_aug_task_name,
+                    train_type=train_type,
                 )
+
+            cache_file_name = get_cache_file_path(self.pl_data_dir, transpose_task_name, train_type)
+            datasets = datasets.map(
+                lambda batch: {"input_values": np.transpose(batch["input_values"][0])},
+                cache_file_name=cache_file_name,
+                num_proc=self.num_proc,
+            )
+            set_cache_log(
+                dataset_dir=target_dataset_dir,
+                num_proc=self.num_proc,
+                cache_task_func_name=transpose_task_name,
+                train_type=train_type,
+            )
+            for shard_idx in range(num_shards):
+                shard_datasets = datasets.shard(num_shards=num_shards, index=shard_idx)
                 shard_datasets.save_to_disk(os.path.join(target_dataset_dir, train_type, str(shard_idx)))
 
     def prepare_data(self):
@@ -127,10 +172,10 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # 여기서 진행하는 작업은 전체 데이터셋을 기준으로 합니다. 꼭 한번에 전체를 해야할지 잘 고민하십시오.
         # log mel spectrogram으로 변환하는게 마침 1회만 진행하면 되고, 있으면 무시되면 되서 여기에 딱 알맞는 Task입니다.
         # 사실 더 명확하게 하려면, 여기서는 raw_audio의 datasets를 다운받는 정도의 Task만 진행하고, log mel spectrogram 변환은 setup에서 하는게 더 나을지도 모르겠습니다. (GPU가 더 빠르려나?)
-        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
-        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
-        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_clean")
-        self.__save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_other")
+        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
+        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
+        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_clean")
+        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_other")
 
     def setup(self, stage: str):
         # prepare_data가 정상적으로 동작되면 호출됩니다. setup은 각 모든 GPU에서 호출됩니다.
@@ -155,20 +200,30 @@ class RNNTransducerDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
         return AudioDataLoader(
-            dataset=self.train_datasets, batch_size=self.per_device_train_batch_size, pad_token_id=self.pad_token_id
+            dataset=self.train_datasets,
+            batch_size=self.per_device_train_batch_size,
+            pad_token_id=self.pad_token_id,
+            n_mels=self.n_mels,
         )
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
         return AudioDataLoader(
-            dataset=self.val_datasets, batch_size=self.per_device_eval_batch_size, pad_token_id=self.pad_token_id
+            dataset=self.val_datasets,
+            batch_size=self.per_device_eval_batch_size,
+            pad_token_id=self.pad_token_id,
+            n_mels=self.n_mels,
         )
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
         return [
-            AudioDataLoader(dataset=self.clean_datasets, batch_size=1, pad_token_id=self.pad_token_id),
-            AudioDataLoader(dataset=self.other_datasets, batch_size=1, pad_token_id=self.pad_token_id),
+            AudioDataLoader(
+                dataset=self.clean_datasets, batch_size=1, pad_token_id=self.pad_token_id, n_mels=self.n_mels
+            ),
+            AudioDataLoader(
+                dataset=self.other_datasets, batch_size=1, pad_token_id=self.pad_token_id, n_mels=self.n_mels
+            ),
         ]
 
     def predict_dataloader(self):
