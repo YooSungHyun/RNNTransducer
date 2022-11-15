@@ -21,6 +21,7 @@ class RNNTransducer(pl.LightningModule):
     # datamodule setup 끝 -> configure_optimizers -> dataloader(collate_fn)
     def __init__(self, prednet_params: dict, transnet_params: dict, jointnet_params: dict, args: Namespace):
         super().__init__()
+        self.save_hyperparameters()
         self.args = args
         self.transnet = AudioTransNet(**transnet_params)
         self.prednet = TextPredNet(**prednet_params)
@@ -164,8 +165,8 @@ class RNNTransducer(pl.LightningModule):
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
         # wer = metric_f.word_error_rate(predictions, labels)
         # cer = metric_f.word_error_rate(predictions, labels)
-        # self.log("WER", wer)
-        # self.log("CER", cer)
+        # self.log("val_wer", wer)
+        # self.log("val_cer", cer)
 
     @property
     def num_training_steps(self) -> int:

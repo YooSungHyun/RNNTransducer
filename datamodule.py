@@ -8,6 +8,7 @@ import numpy as np
 from argparse import Namespace
 from datasets import Dataset
 from dataloader import AudioDataLoader
+from datasampler import DistributedBucketSampler
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -148,9 +149,15 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
             cache_file_name = get_cache_file_path(self.pl_data_dir, transpose_task_name, train_type)
             datasets = datasets.map(
-                lambda batch: {"input_values": np.transpose(batch["input_values"][0])},
+                lambda batch: {
+                    "input_values": np.transpose(batch["input_values"][0]),
+                    "input_ids": batch["grapheme_labels"]["input_ids"],
+                    "audio_len": len(np.transpose(batch["input_values"][0])),
+                    "label_len": len(batch["grapheme_labels"]["input_ids"]),
+                },
                 cache_file_name=cache_file_name,
                 num_proc=self.num_proc,
+                remove_columns=["grapheme_labels"],
             )
             set_cache_log(
                 dataset_dir=target_dataset_dir,
@@ -199,6 +206,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
+        # train_sampler = DistributedBucketSampler(self.train_datasets, shuffle=False, model_input_name="input_values")
         return AudioDataLoader(
             dataset=self.train_datasets,
             batch_size=self.per_device_train_batch_size,
@@ -208,6 +216,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
+        # val_sampler = DistributedBucketSampler(self.val_datasets, shuffle=False, model_input_name="input_values")
         return AudioDataLoader(
             dataset=self.val_datasets,
             batch_size=self.per_device_eval_batch_size,
@@ -217,12 +226,20 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
+        # clean_sampler = DistributedBucketSampler(self.clean_datasets, shuffle=False, model_input_name="input_values")
+        # other_sampler = DistributedBucketSampler(self.other_datasets, shuffle=False, model_input_name="input_values")
         return [
             AudioDataLoader(
-                dataset=self.clean_datasets, batch_size=1, pad_token_id=self.pad_token_id, n_mels=self.n_mels
+                dataset=self.clean_datasets,
+                batch_size=1,
+                pad_token_id=self.pad_token_id,
+                n_mels=self.n_mels,
             ),
             AudioDataLoader(
-                dataset=self.other_datasets, batch_size=1, pad_token_id=self.pad_token_id, n_mels=self.n_mels
+                dataset=self.other_datasets,
+                batch_size=1,
+                pad_token_id=self.pad_token_id,
+                n_mels=self.n_mels,
             ),
         ]
 
