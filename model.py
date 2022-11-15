@@ -5,6 +5,7 @@ from networks import AudioTransNet, TextPredNet, JointNet
 from argparse import Namespace
 from warprnnt_pytorch import RNNTLoss
 import torchmetrics.functional as metric_f
+from transformers import Wav2Vec2CTCTokenizer
 
 
 class RNNTransducer(pl.LightningModule):
@@ -25,6 +26,8 @@ class RNNTransducer(pl.LightningModule):
         self.prednet = TextPredNet(**prednet_params)
         self.jointnet = JointNet(**jointnet_params)
         self.rnnt_loss = RNNTLoss(blank=prednet_params["pad_token_id"], reduction="mean")
+        # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
+        self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
         # Important: This property activates truncated backpropagation through time
         # Setting this value to 2 splits the batch into sequences of size 2
@@ -86,13 +89,9 @@ class RNNTransducer(pl.LightningModule):
 
         return outputs
 
-    def forward(self, inputs, targets, inputs_lengths, targets_lengths, hiddens):
-        if hiddens:
-            enc_hiddens = hiddens[0]
-            dec_hiddens = hiddens[1]
-        else:
-            enc_hiddens = None
-            dec_hiddens = None
+    def forward(self, inputs, targets, inputs_lengths, targets_lengths, hiddens=(None, None)):
+        enc_hiddens = hiddens[0]
+        dec_hiddens = hiddens[1]
         # Use for inference only (separate from training_step)
         # labels의 dim을 2차원으로 배치만큼 세움
         zero = torch.zeros((targets.shape[0], 1)).long()
@@ -104,7 +103,7 @@ class RNNTransducer(pl.LightningModule):
         logits = self.jointnet(enc_state, dec_state)
         return logits, (enc_hidden_states, dec_hidden_states)
 
-    def training_step(self, batch, batch_idx, optimizer_idx, hiddens):
+    def training_step(self, batch, batch_idx, optimizer_idx, hiddens=(None, None)):
         # batch: 실제 데이터
         # batch_idx: TBPTT가 아닌 실제 step의 인덱스 1 step == 1 batch
         # hiddens: TBPTT용 전달 데이터
@@ -137,19 +136,36 @@ class RNNTransducer(pl.LightningModule):
         return {"loss": loss, "hiddens": enc_dec_hiddens}
 
     def validation_step(self, batch, batch_idx):
+        # validation에서의 tbptt는 필요없습니다. (역전파를 진행하지 않으므로)
+        # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
         input_values, labels, seq_lengths, target_lengths = batch
         inputs_lengths = torch.IntTensor(seq_lengths)
         targets_lengths = torch.IntTensor(target_lengths)
-        hiddens = (None, None)
-        logits, _ = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
+        logits, _ = self(input_values, labels, inputs_lengths, targets_lengths)
 
-        return {"preds": logits, "labels": labels}
+        return {"logits": logits, "labels": labels}
+
+    def validation_epoch_end(self, validation_step_outputs):
+        # torch lightning은 약간의 데이터로 초기에 sanity eval step을 수행하고, training step에 돌입합니다.
+        # 여기서도 기본적인 값은 찍어볼 수 있으므로, 1 에폭 간신히 돌려놓고 에러맞아서 멘붕오지말고 미리미리 체크하는 것도 좋겠네요
+        # https://github.com/Lightning-AI/lightning/issues/2295 (trainer의 num_sanity_val_steps 옵션으로 끌 수도 있긴 함.)
+        logits = list()
+        labels = list()
+        for out in validation_step_outputs:
+            logits.append(out["logits"])
+            labels.append(out["labels"])
+        # gpu_0_prediction = predictions[0]
+        # gpu_1_prediction = predictions[1]
+        print(logits)
+        print(labels)
+        # TODO: Predictions list -> seq별 logits argmax -> tokenizer decode
+        # TODO: labels list -> tokenizer decode
         # torchmetrics를 사용하는 경우, DistributedSampler가 각각 장비에서 동작하는 것으로 발생할 수 있는 비동기 문제에서 자유로워진다. (https://torchmetrics.readthedocs.io/en/stable/)
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
-        wer = metric_f.word_error_rate(preds, target)
-        cer = metric_f.word_error_rate(preds, target)
-        self.log("WER", wer)
-        self.log("CER", cer)
+        # wer = metric_f.word_error_rate(predictions, labels)
+        # cer = metric_f.word_error_rate(predictions, labels)
+        # self.log("WER", wer)
+        # self.log("CER", cer)
 
     @property
     def num_training_steps(self) -> int:
