@@ -19,11 +19,9 @@ class AudioDataLoader(torch.utils.data.DataLoader):
         # input_ids: (,token)
         target_lengths = [len(s["grapheme_labels"]["input_ids"]) for s in batch]
 
-        max_seq_size = max(seq_lengths)
         max_target_size = max(target_lengths)
 
         assert self.n_mels == batch[0]["input_values"].size(-1), "config의 feature shape과 실제 데이터의 feature가 다름"
-        feat_size = self.n_mels
         batch_size = len(batch)
 
         input_values = pad_sequence(batch["input_values"], batch_first=True, padding_value=self.pad_token_id)

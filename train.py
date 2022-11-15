@@ -7,9 +7,12 @@ from model import RNNTransducer
 from datamodule import RNNTransducerDataModule
 from pytorch_lightning.strategies import DDPStrategy
 from datetime import timedelta
+from setproctitle import setproctitle
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 
 def main(hparams):
+    setproctitle("bart_online_stt")
     random.seed(hparams.seed)
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed_all(hparams.seed)
@@ -30,8 +33,17 @@ def main(hparams):
     model = RNNTransducer(
         model_config_dict["prednet"], model_config_dict["transnet"], model_config_dict["jointnet"], hparams
     )
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=hparams.output_dir,
+        save_top_k=3,
+        mode="min",
+        monitor="val_wer",
+        filename="bart-online-{epoch:02d}-{val_wer:.4f}",
+    )
+    hparams.callbacks = [checkpoint_callback]
     trainer = Trainer.from_argparse_args(hparams)
     trainer.fit(model, datamodule=RNNT_datamodule)
+    checkpoint_callback.best_model_path
 
 
 if __name__ == "__main__":
@@ -41,6 +53,8 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, help="ddp local rank")
     parser.add_argument("--hf_data_dirs", nargs="+", default=[], type=str, help="source HuggingFace data dirs")
     parser.add_argument("--pl_data_dir", type=str, help="target pytorch lightning data dirs")
+    parser.add_argument("--output_dir", type=str, help="model output path")
+    parser.add_argument("--vocab_path", type=str, help="vocab_path")
     parser.add_argument("--num_shards", type=int, help="target data shard cnt")
     parser.add_argument("--num_proc", type=int, default=None, help="how many proc map?")
     parser.add_argument("--cache_dir", type=str, default=None, help="datasets cache dir path")
