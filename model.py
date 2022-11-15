@@ -87,8 +87,12 @@ class RNNTransducer(pl.LightningModule):
         return outputs
 
     def forward(self, inputs, targets, inputs_lengths, targets_lengths, hiddens):
-        enc_hiddens = hiddens[0]
-        dec_hiddens = hiddens[1]
+        if hiddens:
+            enc_hiddens = hiddens[0]
+            dec_hiddens = hiddens[1]
+        else:
+            enc_hiddens = None
+            dec_hiddens = None
         # Use for inference only (separate from training_step)
         # labels의 dim을 2차원으로 배치만큼 세움
         zero = torch.zeros((targets.shape[0], 1)).long()
@@ -98,10 +102,12 @@ class RNNTransducer(pl.LightningModule):
         enc_state, enc_hidden_states = self.transnet(inputs, inputs_lengths, enc_hiddens)
         dec_state, dec_hidden_states = self.prednet(targets_add_blank, targets_lengths + 1, dec_hiddens)
         logits = self.jointnet(enc_state, dec_state)
-        # TODO Hidden State를 concat을 시켜야할까? (토치 라이트닝에 각각의 2개 네트워크에 대한 bptt 전략이 없다.)
         return logits, (enc_hidden_states, dec_hidden_states)
 
     def training_step(self, batch, batch_idx, optimizer_idx, hiddens):
+        # batch: 실제 데이터
+        # batch_idx: TBPTT가 아닌 실제 step의 인덱스 1 step == 1 batch
+        # hiddens: TBPTT용 전달 데이터
         """
         If the following conditions are satisfied:
         1) cudnn is enabled,
@@ -114,8 +120,13 @@ class RNNTransducer(pl.LightningModule):
         input_values, labels, seq_lengths, target_lengths = batch
         inputs_lengths = torch.IntTensor(seq_lengths)
         targets_lengths = torch.IntTensor(target_lengths)
-        # None, None으로 던지면 알아서 init 수행함
-        hiddens = (None, None)
+        # tbptt 진행시, 긴 시퀀스의 chunk로 진행이 되므로 training_step은 실질적으로 200 seq에 100 step chunk시
+        # 1배치를 수행하기위해 2번의 training_step이 요구됩니다. (0~99, 100~199를 수행하기 위함)
+        # 하지만, 새로운 배치에서의 hiddens은 이전과 연결되면 안되며, 매우 똑똑하게도, 새로운 batch_idx의 스텝시작시에는 hiddens는 None으로 처리됩니다.
+        # 실험은 ./multi_network_tbptt_test.py로 해볼 수 있음.
+
+        # TODO: 뭔가 대충넣어도 bptt만 사용하면 가능한 시나리오에 loss가 전부 동일하게 떨어짐, 모델 학습 테스트 필요할듯
+        # 예를들어, transcription만 bptt 써본다던가, 다 써본다던가 하는....
         logits, enc_dec_hiddens = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
         loss = self.rnnt_loss(logits, labels, inputs_lengths, targets_lengths)
 
