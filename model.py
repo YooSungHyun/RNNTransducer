@@ -95,7 +95,7 @@ class RNNTransducer(pl.LightningModule):
         dec_hiddens = hiddens[1]
         # Use for inference only (separate from training_step)
         # labels의 dim을 2차원으로 배치만큼 세움
-        zero = torch.zeros((targets.shape[0], 1)).long()
+        zero = torch.zeros((targets.shape[0], 1)).long().cuda()
         # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
         targets_add_blank = torch.cat((zero, targets), dim=1)
 

@@ -8,7 +8,7 @@ import numpy as np
 from argparse import Namespace
 from datasets import Dataset
 from dataloader import AudioDataLoader
-from datasampler import DistributedBucketSampler
+from transformers.trainer_pt_utils import DistributedLengthGroupedSampler
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -193,53 +193,77 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # stage must like {fit,validate,test,predict}
         if stage == "fit":
             self.train_datasets = get_concat_dataset([self.pl_data_dir], "train")
-            self.train_datasets.set_format("torch")
+            self.train_datasets.set_format("torch", ["input_values", "input_ids"])
             self.val_datasets = get_concat_dataset([self.pl_data_dir], "dev")
-            self.val_datasets.set_format("torch")
+            self.val_datasets.set_format("torch", ["input_values", "input_ids"])
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test":
             self.clean_datasets = get_concat_dataset([self.pl_data_dir], "eval_clean")
-            self.clean_datasets.set_format("torch")
+            self.clean_datasets.set_format("torch", ["input_values", "input_ids"])
             self.other_datasets = get_concat_dataset([self.pl_data_dir], "eval_other")
-            self.other_datasets.set_format("torch")
+            self.other_datasets.set_format("torch", ["input_values", "input_ids"])
 
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
-        # train_sampler = DistributedBucketSampler(self.train_datasets, shuffle=False, model_input_name="input_values")
+        train_sampler = DistributedLengthGroupedSampler(
+            batch_size=self.per_device_eval_batch_size,
+            dataset=self.train_datasets,
+            model_input_name="input_values",
+            lengths=self.train_datasets["audio_len"],
+        )
         return AudioDataLoader(
             dataset=self.train_datasets,
             batch_size=self.per_device_train_batch_size,
             pad_token_id=self.pad_token_id,
             n_mels=self.n_mels,
+            sampler=train_sampler,
         )
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
-        # val_sampler = DistributedBucketSampler(self.val_datasets, shuffle=False, model_input_name="input_values")
+        val_sampler = DistributedLengthGroupedSampler(
+            batch_size=self.per_device_eval_batch_size,
+            dataset=self.val_datasets,
+            model_input_name="input_values",
+            lengths=self.val_datasets["audio_len"],
+        )
         return AudioDataLoader(
             dataset=self.val_datasets,
             batch_size=self.per_device_eval_batch_size,
             pad_token_id=self.pad_token_id,
             n_mels=self.n_mels,
+            sampler=val_sampler,
         )
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
-        # clean_sampler = DistributedBucketSampler(self.clean_datasets, shuffle=False, model_input_name="input_values")
-        # other_sampler = DistributedBucketSampler(self.other_datasets, shuffle=False, model_input_name="input_values")
+        clean_sampler = DistributedLengthGroupedSampler(
+            batch_size=self.per_device_eval_batch_size,
+            dataset=self.clean_datasets,
+            model_input_name="input_values",
+            lengths=self.clean_datasets["audio_len"],
+        )
+        other_sampler = DistributedLengthGroupedSampler(
+            batch_size=self.per_device_eval_batch_size,
+            dataset=self.other_datasets,
+            model_input_name="input_values",
+            lengths=self.other_datasets["audio_len"],
+        )
         return [
             AudioDataLoader(
                 dataset=self.clean_datasets,
                 batch_size=1,
                 pad_token_id=self.pad_token_id,
                 n_mels=self.n_mels,
+                sampler=clean_sampler,
             ),
             AudioDataLoader(
                 dataset=self.other_datasets,
                 batch_size=1,
                 pad_token_id=self.pad_token_id,
                 n_mels=self.n_mels,
+                sampler=other_sampler,
             ),
         ]
 

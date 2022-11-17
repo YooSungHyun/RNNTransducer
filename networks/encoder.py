@@ -96,10 +96,12 @@ class AudioTransNet(nn.Module):
         # inputs shape: (batch_size, seq, features)
         if input_lengths is not None:
             # enforce_sorted -> 내부에서 강제로 내림차순 정렬시킨다.
-            inputs = nn.utils.rnn.pack_padded_sequence(inputs, input_lengths, batch_first=True, enforce_sorted=True)
+            padded_inputs = nn.utils.rnn.pack_padded_sequence(
+                inputs, input_lengths, batch_first=True, enforce_sorted=True
+            )
             # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
             self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(inputs, prev_hidden_state)
+            outputs, hidden_states = self.rnn(padded_inputs, prev_hidden_state)
             outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True, total_length=inputs.size(1))
         else:
             self.rnn.flatten_parameters()
