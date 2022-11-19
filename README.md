@@ -29,3 +29,6 @@ datamodule.py에서 하는 역할은 크게 2가지입니다.
 1. 위의 raw 음성을, log melspectrogram으로 변환합니다. `load_raw_to_melspect_datasets`
    1. 해당 dataset을 저장합니다. (이미 경로가 있다면 불러서 사용)
 2. 작성중
+
+RNNT_loss를 사용하면 BPTT 역전파는 고려대상이 아닐 수 있습니다.<br />
+https://github.com/fd873630/RNN-Transducer/issues/6
