@@ -179,10 +179,14 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         # 여기서 진행하는 작업은 전체 데이터셋을 기준으로 합니다. 꼭 한번에 전체를 해야할지 잘 고민하십시오.
         # log mel spectrogram으로 변환하는게 마침 1회만 진행하면 되고, 있으면 무시되면 되서 여기에 딱 알맞는 Task입니다.
         # 사실 더 명확하게 하려면, 여기서는 raw_audio의 datasets를 다운받는 정도의 Task만 진행하고, log mel spectrogram 변환은 setup에서 하는게 더 나을지도 모르겠습니다. (GPU가 더 빠르려나?)
-        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
-        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
-        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_clean")
-        self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_other")
+        if self.hf_data_dirs:
+            self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "train")
+            self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "dev")
+            self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_clean")
+            self.save_raw_to_logmelspect_datasets(self.hf_data_dirs, self.pl_data_dir, "eval_other")
+        else:
+            print("hf_data_dirs 파라미터가 없습니다. prepare_data() 작업은 무시됩니다.")
+            pass
 
     def setup(self, stage: str):
         # prepare_data가 정상적으로 동작되면 호출됩니다. setup은 각 모든 GPU에서 호출됩니다.
