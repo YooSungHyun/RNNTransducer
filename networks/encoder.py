@@ -75,7 +75,7 @@ class AudioTransNet(nn.Module):
         )
         self.out_proj = nn.Linear(2 * hidden_size if bidirectional else hidden_size, output_size)
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor, prev_hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` for  encoder training.
 
@@ -101,11 +101,11 @@ class AudioTransNet(nn.Module):
             )
             # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
             self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(padded_inputs, prev_hidden_state)
+            outputs, hidden_states = self.rnn(padded_inputs)
             outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         else:
             self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(inputs, prev_hidden_state)
+            outputs, hidden_states = self.rnn(inputs)
 
         outputs = self.out_proj(outputs)
         """

@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
+from networks import AudioTransNet, TextPredNet
 
 
 class JointNet(nn.Module):
@@ -35,10 +36,12 @@ class JointNet(nn.Module):
         * predictions (torch.FloatTensor): Result of model predictions.
     """
 
-    def __init__(self, encoder: object, decoder: object, num_classes: int, input_size: int, forward_output_size: int):
+    def __init__(
+        self, transnet_params: dict, prednet_params: dict, num_classes: int, input_size: int, forward_output_size: int
+    ):
         super(JointNet, self).__init__()
-        self.encoder = encoder
-        self.decoder = decoder
+        self.encoder = AudioTransNet(**transnet_params)
+        self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
         self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
         self.gelu = nn.GELU(approximate="tanh")
@@ -77,9 +80,7 @@ class JointNet(nn.Module):
 
         return outputs
 
-    def forward(
-        self, inputs: Tensor, inputs_lengths: Tensor, targets: Tensor, targets_lengths: Tensor, hiddens: Tuple[Tensor]
-    ) -> Tensor:
+    def forward(self, inputs: Tensor, inputs_lengths: Tensor, targets: Tensor, targets_lengths: Tensor) -> Tensor:
         """
         Forward propagate a `inputs` and `targets` pair for training.
 
@@ -89,20 +90,71 @@ class JointNet(nn.Module):
             input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
             targets (torch.LongTensr): A target sequence passed to decoder. `IntTensor` of size ``(batch, seq_length)``
             target_lengths (torch.LongTensor): The length of target tensor. ``(batch)``
-            hiddens(Tuple[Tensor]): (encoder_hiddens, decoder_hiddens) for BackPropagation Through Time
 
         Returns:
             * predictions (torch.FloatTensor): Result of model predictions.
         """
-        enc_hiddens = hiddens[0]
-        dec_hiddens = hiddens[1]
         # Use for inference only (separate from training_step)
         # labels의 dim을 2차원으로 배치만큼 세움
-        zero = torch.zeros((targets.shape[0], 1)).long().cuda()
+        first_bos_token_id = torch.full((targets.size(0), 1), self.decoder.bos_token_id, device="cuda")
         # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
-        targets_add_blank = torch.cat((zero, targets), dim=1)
+        targets_add_blank = torch.cat((first_bos_token_id, targets), dim=1)
 
-        enc_state, enc_hidden_states = self.encoder(inputs, inputs_lengths, enc_hiddens)
-        dec_state, dec_hidden_states = self.decoder(targets_add_blank, targets_lengths + 1, dec_hiddens)
+        enc_state, _ = self.encoder(inputs, inputs_lengths)
+        # targets_lengths는 어짜피 sort에만 쓰이므로 꼭 +1 해줄 필요는 없는데, 데이터 일치성을 위해서 그냥 시켰다.
+        dec_state, _ = self.decoder(targets_add_blank, targets_lengths + 1)
         outputs = self.joint(enc_state, dec_state)
-        return outputs, (enc_hidden_states, dec_hidden_states)
+        return outputs
+
+    @torch.no_grad()
+    def decode(self, encoder_output: Tensor, max_length: int) -> Tensor:
+        """
+        Decode `encoder_outputs`.
+
+        Args:
+            encoder_output (torch.FloatTensor): A output sequence of encoder. `FloatTensor` of size
+                ``(seq_length, dimension)``
+            max_length (int): max decoding time step
+
+        Returns:
+            * predicted_log_probs (torch.FloatTensor): Log probability of model predictions.
+        """
+        pred_tokens, hidden_state = list(), None
+        decoder_input = encoder_output.new_tensor([[self.decoder.bos_token_id]], dtype=torch.long)
+
+        for t in range(max_length):
+            decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
+            step_output = self.joint(encoder_output[t].view(-1), decoder_output.view(-1))
+            step_output = step_output.softmax(dim=0)
+            pred_token = step_output.argmax(dim=0)
+            pred_token = int(pred_token.item())
+            pred_tokens.append(pred_token)
+            decoder_input = step_output.new_tensor([[pred_token]], dtype=torch.long)
+
+        return torch.LongTensor(pred_tokens)
+
+    @torch.no_grad()
+    def recognize(self, inputs: Tensor, input_lengths: Tensor) -> Tensor:
+        """
+        Recognize input speech. This method consists of the forward of the encoder and the decode() of the decoder.
+
+        Args:
+            inputs (torch.FloatTensor): A input sequence passed to encoder. Typically for inputs this will be a padded
+                `FloatTensor` of size ``(batch, seq_length, dimension)``.
+            input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
+
+        Returns:
+            * predictions (torch.FloatTensor): Result of model predictions.
+        """
+        outputs = list()
+
+        encoder_outputs, encoder_hiddens = self.encoder(inputs, input_lengths)
+        max_length = encoder_outputs.size(1)
+
+        for encoder_output in encoder_outputs:
+            decoded_seq = self.decode(encoder_output, max_length)
+            outputs.append(decoded_seq)
+
+        outputs = torch.stack(outputs, dim=1).transpose(0, 1)
+
+        return outputs
