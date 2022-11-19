@@ -1,7 +1,7 @@
 {
     "model": {
         "transnet": {
-            "input_size": 200,
+            "input_size": 80,
             "hidden_size": 320,
             "output_size": 512,
             "num_layers": 2,
@@ -22,8 +22,7 @@
         },
         "jointnet": {
             "num_classes": 72,
-            "input_size": 512,
-            "forward_output_size": 256
+            "forward_output_size": 512
         }
     },
     "data": {

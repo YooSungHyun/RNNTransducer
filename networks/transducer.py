@@ -15,6 +15,7 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
+from typing import Tuple
 
 
 class JointNet(nn.Module):
@@ -34,8 +35,10 @@ class JointNet(nn.Module):
         * predictions (torch.FloatTensor): Result of model predictions.
     """
 
-    def __init__(self, num_classes: int, input_size: int, forward_output_size: int):
+    def __init__(self, encoder: object, decoder: object, num_classes: int, input_size: int, forward_output_size: int):
         super(JointNet, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
         self.num_classes = num_classes
         self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
         self.gelu = nn.GELU(approximate="tanh")
@@ -49,8 +52,8 @@ class JointNet(nn.Module):
         Args:
             encoder_outputs (torch.FloatTensor): A output sequence of encoder. `FloatTensor` of size
                 ``(batch, seq_length, dimension)``
-            decoder_outputs (torch.FloatTensor): A output sequence of decoder. `FloatTensor` of size
-                ``(batch, seq_length, dimension)``
+            decoder_outputs (torch.FloatTensor): A output sequence of decoder (added blank). `FloatTensor` of size
+                ``(batch, seq_length+1(blank token), dimension)``
 
         Returns:
             * outputs (torch.FloatTensor): outputs of joint `encoder_outputs` and `decoder_outputs`..
@@ -59,8 +62,8 @@ class JointNet(nn.Module):
             input_length = encoder_outputs.size(1)
             target_length = decoder_outputs.size(1)
 
-            encoder_outputs = encoder_outputs.unsqueeze(1)
-            decoder_outputs = decoder_outputs.unsqueeze(2)
+            encoder_outputs = encoder_outputs.unsqueeze(2)
+            decoder_outputs = decoder_outputs.unsqueeze(1)
 
             encoder_outputs = encoder_outputs.repeat([1, 1, target_length, 1])
             decoder_outputs = decoder_outputs.repeat([1, input_length, 1, 1])
@@ -74,7 +77,9 @@ class JointNet(nn.Module):
 
         return outputs
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor, targets: Tensor, target_lengths: Tensor) -> Tensor:
+    def forward(
+        self, inputs: Tensor, inputs_lengths: Tensor, targets: Tensor, targets_lengths: Tensor, hiddens: Tuple[Tensor]
+    ) -> Tensor:
         """
         Forward propagate a `inputs` and `targets` pair for training.
 
@@ -84,11 +89,20 @@ class JointNet(nn.Module):
             input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
             targets (torch.LongTensr): A target sequence passed to decoder. `IntTensor` of size ``(batch, seq_length)``
             target_lengths (torch.LongTensor): The length of target tensor. ``(batch)``
+            hiddens(Tuple[Tensor]): (encoder_hiddens, decoder_hiddens) for BackPropagation Through Time
 
         Returns:
             * predictions (torch.FloatTensor): Result of model predictions.
         """
-        encoder_outputs, _ = self.encoder(inputs, input_lengths)
-        decoder_outputs, _ = self.decoder(targets, target_lengths)
-        outputs = self.joint(encoder_outputs, decoder_outputs)
-        return outputs
+        enc_hiddens = hiddens[0]
+        dec_hiddens = hiddens[1]
+        # Use for inference only (separate from training_step)
+        # labels의 dim을 2차원으로 배치만큼 세움
+        zero = torch.zeros((targets.shape[0], 1)).long().cuda()
+        # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
+        targets_add_blank = torch.cat((zero, targets), dim=1)
+
+        enc_state, enc_hidden_states = self.encoder(inputs, inputs_lengths, enc_hiddens)
+        dec_state, dec_hidden_states = self.decoder(targets_add_blank, targets_lengths + 1, dec_hiddens)
+        outputs = self.joint(enc_state, dec_state)
+        return outputs, (enc_hidden_states, dec_hidden_states)

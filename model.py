@@ -23,9 +23,11 @@ class RNNTransducer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.args = args
+        # 다른 Transducer 쓰고싶으면 여기서 En,Decoder만 변경해서 사용
         self.transnet = AudioTransNet(**transnet_params)
         self.prednet = TextPredNet(**prednet_params)
-        self.jointnet = JointNet(**jointnet_params)
+        jointnet_params["input_size"] = transnet_params["output_size"] + prednet_params["output_size"]
+        self.jointnet = JointNet(self.transnet, self.prednet, **jointnet_params)
         self.rnnt_loss = RNNTLoss(blank=prednet_params["pad_token_id"], reduction="mean")
         # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
         self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
@@ -90,19 +92,9 @@ class RNNTransducer(pl.LightningModule):
 
         return outputs
 
-    def forward(self, inputs, targets, inputs_lengths, targets_lengths, hiddens=(None, None)):
-        enc_hiddens = hiddens[0]
-        dec_hiddens = hiddens[1]
-        # Use for inference only (separate from training_step)
-        # labels의 dim을 2차원으로 배치만큼 세움
-        zero = torch.zeros((targets.shape[0], 1)).long().cuda()
-        # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
-        targets_add_blank = torch.cat((zero, targets), dim=1)
-
-        enc_state, enc_hidden_states = self.transnet(inputs, inputs_lengths, enc_hiddens)
-        dec_state, dec_hidden_states = self.prednet(targets_add_blank, targets_lengths + 1, dec_hiddens)
-        logits = self.jointnet(enc_state, dec_state)
-        return logits, (enc_hidden_states, dec_hidden_states)
+    def forward(self, inputs, inputs_lengths, targets, targets_lengths, hiddens=(None, None)):
+        logits, hiddens = self.jointnet(inputs, inputs_lengths, targets, targets_lengths, hiddens=hiddens)
+        return logits, hiddens
 
     def training_step(self, batch, batch_idx, optimizer_idx, hiddens=(None, None)):
         # batch: 실제 데이터
@@ -117,9 +109,9 @@ class RNNTransducer(pl.LightningModule):
         5) input data is not in PackedSequence format persistent algorithm
         can be selected to improve performance.
         """
-        input_values, labels, seq_lengths, target_lengths = batch
-        inputs_lengths = torch.IntTensor(seq_lengths)
-        targets_lengths = torch.IntTensor(target_lengths)
+        input_values, inputs_lengths, targets, targets_lengths = batch
+        inputs_lengths = torch.IntTensor(inputs_lengths)
+        targets_lengths = torch.IntTensor(targets_lengths)
         # tbptt 진행시, 긴 시퀀스의 chunk로 진행이 되므로 training_step은 실질적으로 200 seq에 100 step chunk시
         # 1배치를 수행하기위해 2번의 training_step이 요구됩니다. (0~99, 100~199를 수행하기 위함)
         # 하지만, 새로운 배치에서의 hiddens은 이전과 연결되면 안되며, 매우 똑똑하게도, 새로운 batch_idx의 스텝시작시에는 hiddens는 None으로 처리됩니다.
@@ -127,8 +119,8 @@ class RNNTransducer(pl.LightningModule):
 
         # TODO: 뭔가 대충넣어도 bptt만 사용하면 가능한 시나리오에 loss가 전부 동일하게 떨어짐, 모델 학습 테스트 필요할듯
         # 예를들어, transcription만 bptt 써본다던가, 다 써본다던가 하는....
-        logits, enc_dec_hiddens = self(input_values, labels, inputs_lengths, targets_lengths, hiddens)
-        loss = self.rnnt_loss(logits, labels, inputs_lengths, targets_lengths)
+        logits, enc_dec_hiddens = self(input_values, inputs_lengths, targets, targets_lengths, hiddens)
+        loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
 
         # sync_dist를 선언하는 것으로 ddp의 4장비에서 계산된 loss의 평균치를 async로 불러오도록 한다. (log할때만 집계됨)
         self.log("train_loss_step", loss, sync_dist=True)
@@ -139,34 +131,41 @@ class RNNTransducer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         # validation에서의 tbptt는 필요없습니다. (역전파를 진행하지 않으므로)
         # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
-        input_values, labels, seq_lengths, target_lengths = batch
-        inputs_lengths = torch.IntTensor(seq_lengths)
-        targets_lengths = torch.IntTensor(target_lengths)
-        logits, _ = self(input_values, labels, inputs_lengths, targets_lengths)
+        input_values, inputs_lengths, targets, targets_lengths = batch
+        inputs_lengths = torch.IntTensor(inputs_lengths)
+        targets_lengths = torch.IntTensor(targets_lengths)
+        logits, _ = self(input_values, inputs_lengths, targets, targets_lengths)
 
-        return {"logits": logits, "labels": labels}
+        return {"logits": logits, "labels": targets}
 
     def validation_epoch_end(self, validation_step_outputs):
         # torch lightning은 약간의 데이터로 초기에 sanity eval step을 수행하고, training step에 돌입합니다.
         # 여기서도 기본적인 값은 찍어볼 수 있으므로, 1 에폭 간신히 돌려놓고 에러맞아서 멘붕오지말고 미리미리 체크하는 것도 좋겠네요
         # https://github.com/Lightning-AI/lightning/issues/2295 (trainer의 num_sanity_val_steps 옵션으로 끌 수도 있긴 함.)
-        logits = list()
-        labels = list()
+        each_steps_batched_logits = list()
+        each_steps_batched_labels = list()
         for out in validation_step_outputs:
-            logits.append(out["logits"])
-            labels.append(out["labels"])
-        # gpu_0_prediction = predictions[0]
-        # gpu_1_prediction = predictions[1]
-        print(logits)
-        print(labels)
-        # TODO: Predictions list -> seq별 logits argmax -> tokenizer decode
-        # TODO: labels list -> tokenizer decode
+            each_steps_batched_logits.append(out["logits"])
+            each_steps_batched_labels.append(out["labels"])
+
+        decoded_batch_preds = list()
+        # 우리가 기대하는 최종 문장은 time_sequence의 가장 마지막이어야 하므로, 가장 마지막 문장만 WER을 기록한다.
+        for each_batched_logits in each_steps_batched_logits:
+            # 각 배치의 가장 마지막 타임시퀀스 Token들만 구함
+            each_batched_last_seq_greedy_tokens = torch.argmax(each_batched_logits, -1)[:, -1, :]
+            # 각 배치의 가장 마지막 Token들만 decode
+            decoded_batch_preds.extend(self.tokenizer.batch_decode(each_batched_last_seq_greedy_tokens))
+
+        decoded_batch_labels = list()
+        for each_batched_labels in each_steps_batched_labels:
+            decoded_batch_labels.extend(self.tokenizer.batch_decode(each_batched_labels))
+
         # torchmetrics를 사용하는 경우, DistributedSampler가 각각 장비에서 동작하는 것으로 발생할 수 있는 비동기 문제에서 자유로워진다. (https://torchmetrics.readthedocs.io/en/stable/)
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
-        # wer = metric_f.word_error_rate(predictions, labels)
-        # cer = metric_f.word_error_rate(predictions, labels)
-        # self.log("val_wer", wer)
-        # self.log("val_cer", cer)
+        wer = metric_f.word_error_rate(decoded_batch_preds, decoded_batch_labels)
+        cer = metric_f.word_error_rate(decoded_batch_preds, decoded_batch_labels)
+        self.log("val_wer", wer)
+        self.log("val_cer", cer)
 
     @property
     def num_training_steps(self) -> int:
