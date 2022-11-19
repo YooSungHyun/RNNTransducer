@@ -26,22 +26,23 @@ git clone -b espnet_v1.1 --single-branch https://github.com/YooSungHyun/warp-tra
 &nbsp;&nbsp;&nbsp;&nbsp;**input_ids**: tokenize 진행된 자소값입니다.<br />
 **length**: len(input_values) 입니다. HuggingFace에서 사용하던 SmartBatching용 데이터를 쓰다보니 들어있네요. <br />
 
-> HuggingFace의 Audio FeatureExtractor와 Tokenizer를 사용해보신 분들이라면, 최대한 익숙할 수 있도록 naming하여 사용되었습니다. <br />
-데이터는 Shard되어 처리되어 있어야 합니다. TB 단위 데이터를 학습시키다보면, shard 미진행 시, 학습간, IO 병목을 겪을 수 있습니다. <br />
-KsponSpeech는 20 shard정도가 적절하여, Train 20, Eval 1, Clean/Other 1 shard로 만들어 놨습니다. <br />
-Default Datasets(HF_DATA_DIRS) 은, 꼭! shard된 상위 구조의 Dataset을 먼저 만들어 주세요. <br />
+- HuggingFace의 Audio FeatureExtractor와 Tokenizer를 사용해보신 분들이라면, 최대한 익숙할 수 있도록 naming하여 사용되었습니다. <br />
+- 데이터는 Shard되어 처리되어 있어야 합니다. <br />
+    - TB 단위 데이터를 학습시키다보면, shard 미진행 시, 학습간, IO 병목을 겪을 수 있습니다. <br />
+- KsponSpeech는 20 shard정도가 적절 <br />
+    - Train 20, Eval 1, Clean/Other 1 shard로 만들어 놨습니다. <br />
+- Default Datasets(HF_DATA_DIRS) 은, 꼭! shard된 상위 구조의 Dataset을 먼저 만들어 주세요. <br />
 
 # Scripts
 필수적인 것만 설명하겠습니다. <br />
-**torchrun**: 가장 중요합니다. 해당 프로젝트는 DP를 지원하지 않습니다. 무조건 DDP로만 동작 가능합니다. <br />
-HF_DATA_DIRS: 위에 설명된 raw datasets 입니다. 각각 엔터로 구분하여 넣으면 되는데, KsponSpeech 단일 프로젝트만 Test 완료되었습니다. <br />
-PL_DATA_DIR: HF_DATA_DIRS로 log_melspect 변환과 spec_arguments를 진행할 전처리 output 경로입니다. <br />
-vocab_path: vocab_path 입니다. 모호한 숫자와 영어 등을 전부 제거하고 vocab을 뽑으면 72개가 나올 것입니다. <br />
-num_proc: 전처리를 진행할 프로세스 수입니다. cpu상황을 고려해서 선택하십시오. <br />
-num_shard: shard를 진행할 개수입니다. KsponSpeech의 경우 20이 적당합니다. <br />
+- **torchrun**: 가장 중요합니다. 해당 프로젝트는 DP를 지원하지 않습니다. 무조건 DDP로만 동작 가능합니다. <br />
+- HF_DATA_DIRS: 위에 설명된 raw datasets 입니다. 각각 엔터로 구분하여 넣으면 되는데, KsponSpeech 단일 프로젝트만 Test 완료되었습니다. <br />
+- PL_DATA_DIR: HF_DATA_DIRS로 log_melspect 변환과 spec_arguments를 진행할 전처리 output 경로입니다. <br />
+- vocab_path: vocab_path 입니다. 모호한 숫자와 영어 등을 전부 제거하고 vocab을 뽑으면 72개가 나올 것입니다. <br />
+- num_proc: 전처리를 진행할 프로세스 수입니다. cpu상황을 고려해서 선택하십시오. <br />
+- num_shard: shard를 진행할 개수입니다. KsponSpeech의 경우 20이 적당합니다. <br />
 
 # datamodule
-datamodule.py에서 하는 역할은 크게 2가지입니다.
 1. prepare_data()
     - 위의 raw 음성 -> 평균분산 정규화 -> log melspectrogram(channel,mel,seq) -> spec aguments (channel,mel,seq) -> transpose (seq,mel)
     - Training Code의 일관성을 유지하기위해서 transpose까지 전부 시켜서 저장하며, spec_aguments와 실험용으로 plt 출력이 (c,m,s) 순이여야만 동작하므로 위와같이 처리합니다.
@@ -62,6 +63,8 @@ https://github.com/fd873630/RNN-Transducer/issues/6 <br />
 혹시 몰라 더럽더라도, BPTT와 관련된 주석은 최대한 남겨놓고, 소스는 주석처리하였습니다. <br />
 <br />
 아쉬운 점이 있다면, pad_packed의 lengths와 loss 계산의 lengths가 각각 cpu, gpu에서만 동작하여, 넣었다 뺐다 하는데 좀 손해를 보고, 코드를 잘 짠거같은데 GPU Utils가 크게 좋지는 않습니다.
+
+# Inference
 
 # Result
 
