@@ -58,11 +58,12 @@ Optimize, lr_scheduler, lr_scheduler를 위한 Epoch당 Steps 수 계산 등 학
 `training_step` -> `self.forward()` -> `training_step_end`(사실 training_step이랑 합쳐도 될듯) -> `optimize_step` -> `validateion_step` -> `validation_epoch_step` <br />
 순으로 진행됩니다. <br />
 ## BPTT (BackPropagation Through Time)
-RNNT_loss를 사용하면 BPTT 역전파는 고려대상이 아닐 수 있습니다. <br />
-https://github.com/fd873630/RNN-Transducer/issues/6 <br />
+RNNT_loss를 사용하면 BPTT 역전파는 고려대상이 아닐 수 있습니다. [참고링크](https://github.com/fd873630/RNN-Transducer/issues/6) <br />
 혹시 몰라 더럽더라도, BPTT와 관련된 주석은 최대한 남겨놓고, 소스는 주석처리하였습니다. <br />
-<br />
-아쉬운 점이 있다면, pad_packed의 lengths와 loss 계산의 lengths가 각각 cpu, gpu에서만 동작하여, 넣었다 뺐다 하는데 좀 손해를 보고, 코드를 잘 짠거같은데 GPU Utils가 크게 좋지는 않습니다.
+
+## 아쉬운 점
+- pad_packed의 lengths와 loss 계산의 lengths가 각각 cpu, gpu에서만 동작하여, 넣었다 뺐다 하는데 리소스 손해봄
+- 코드를 잘 짠거같은데 GPU Utils가 크게 좋지는 않습니다. (3090기준 50% 언더로 왔다갔다함.)
 
 # Inference
 
