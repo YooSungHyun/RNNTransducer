@@ -1,10 +1,9 @@
 import torch
-from torch import Tensor
 import pytorch_lightning as pl
-from networks import AudioTransNet, TextPredNet, JointNet
+from networks import JointNet
 from argparse import Namespace
 from warprnnt_pytorch import RNNTLoss
-import torchmetrics.functional as metric_f
+from torchmetrics import WordErrorRate, CharErrorRate
 from transformers import Wav2Vec2CTCTokenizer
 
 
@@ -24,11 +23,11 @@ class RNNTransducer(pl.LightningModule):
         self.save_hyperparameters()
         self.args = args
         # 다른 Transducer 쓰고싶으면 여기서 En,Decoder만 변경해서 사용
-        self.transnet = AudioTransNet(**transnet_params)
-        self.prednet = TextPredNet(**prednet_params)
         jointnet_params["input_size"] = transnet_params["output_size"] + prednet_params["output_size"]
-        self.jointnet = JointNet(self.transnet, self.prednet, **jointnet_params)
-        self.rnnt_loss = RNNTLoss(blank=prednet_params["pad_token_id"], reduction="mean")
+        self.jointnet = JointNet(transnet_params, prednet_params, **jointnet_params)
+        self.rnnt_loss = RNNTLoss(blank=prednet_params["bos_token_id"], reduction="mean")
+        self.calc_wer = WordErrorRate()
+        self.calc_cer = CharErrorRate()
         # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
         self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
@@ -37,66 +36,21 @@ class RNNTransducer(pl.LightningModule):
         # 배치들을 시간별로 자를 길이를 지정합니다. 자른만큼씩 역전파가 진행됩니다.
         # 해당 기능을 사용하려면 무조건 batch_first True여야 합니다.
         # batch의 split을 수정하려면, pytorch_lightning.core.module.LightningModule.tbptt_split_batch()를 재정의하세요.
-        self.truncated_bptt_steps = 2
 
-    @torch.no_grad()
-    def decode(self, encoder_output: Tensor, max_length: int) -> Tensor:
-        """
-        Decode `encoder_outputs`.
+        # !!!!!!!! bptt 미적용
+        # rnnt_loss를 사용하면 기본적으로 전체 타임 순서에 대한 reduction된 output이 나온다. (나는 -> 나는 밥을 -> 나는 밥을 먹었다 의 loss reduction)
+        # bptt를 사용하려면, '나는'일때 역전파 1번, '나는 밥을'일때 역전파 1번, '나는 밥을 먹었다' 일때 역전파 1번해서 각각 3번의 역전파를 시켜야하는데,
+        # 라이브러리를 쓰면서 활용하려면, input_lengths만큼 역전파가 진행되어야 해서, 실질적으로 optimizing step을 수동으로 돌려야할 것이다.
+        # 수동으로 돌리려면, 그 만큼 성능도 저하될테니, 논문 그대로의 구현체를 만들어야 할 것이다.
+        # RNNTloss github 소스를 보면, 내부에서 C로 trans_grad와 pred_grad를 다루는 부분이 있는데, bptt 형태로 알아서 적용해주나 싶기도 하다...?
+        # 자세한 사항은 README 참고
+        # self.truncated_bptt_steps = 1
 
-        Args:
-            encoder_output (torch.FloatTensor): A output sequence of encoder. `FloatTensor` of size
-                ``(seq_length, dimension)``
-            max_length (int): max decoding time step
+    def forward(self, inputs, inputs_lengths, targets, targets_lengths):
+        logits = self.jointnet(inputs, inputs_lengths, targets, targets_lengths)
+        return logits
 
-        Returns:
-            * predicted_log_probs (torch.FloatTensor): Log probability of model predictions.
-        """
-        pred_tokens, hidden_state = list(), None
-        decoder_input = encoder_output.new_tensor([[self.decoder.sos_id]], dtype=torch.long)
-
-        for t in range(max_length):
-            decoder_output, hidden_state = self.decoder(decoder_input, hidden_states=hidden_state)
-            step_output = self.joint(encoder_output[t].view(-1), decoder_output.view(-1))
-            step_output = step_output.softmax(dim=0)
-            pred_token = step_output.argmax(dim=0)
-            pred_token = int(pred_token.item())
-            pred_tokens.append(pred_token)
-            decoder_input = step_output.new_tensor([[pred_token]], dtype=torch.long)
-
-        return torch.LongTensor(pred_tokens)
-
-    @torch.no_grad()
-    def recognize(self, inputs: Tensor, input_lengths: Tensor) -> Tensor:
-        """
-        Recognize input speech. This method consists of the forward of the encoder and the decode() of the decoder.
-
-        Args:
-            inputs (torch.FloatTensor): A input sequence passed to encoder. Typically for inputs this will be a padded
-                `FloatTensor` of size ``(batch, seq_length, dimension)``.
-            input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
-
-        Returns:
-            * predictions (torch.FloatTensor): Result of model predictions.
-        """
-        outputs = list()
-
-        encoder_outputs, output_lengths = self.encoder(inputs, input_lengths)
-        max_length = encoder_outputs.size(1)
-
-        for encoder_output in encoder_outputs:
-            decoded_seq = self.decode(encoder_output, max_length)
-            outputs.append(decoded_seq)
-
-        outputs = torch.stack(outputs, dim=1).transpose(0, 1)
-
-        return outputs
-
-    def forward(self, inputs, inputs_lengths, targets, targets_lengths, hiddens=(None, None)):
-        logits, hiddens = self.jointnet(inputs, inputs_lengths, targets, targets_lengths, hiddens=hiddens)
-        return logits, hiddens
-
-    def training_step(self, batch, batch_idx, optimizer_idx, hiddens=(None, None)):
+    def training_step(self, batch, batch_idx):
         # batch: 실제 데이터
         # batch_idx: TBPTT가 아닌 실제 step의 인덱스 1 step == 1 batch
         # hiddens: TBPTT용 전달 데이터
@@ -110,62 +64,71 @@ class RNNTransducer(pl.LightningModule):
         can be selected to improve performance.
         """
         input_values, inputs_lengths, targets, targets_lengths = batch
+        # collate에서 나올때는, torch로 넘기면 자동으로 GPU로 넘어가게 되어서, pad_packed를 위한 lengths는 여기서 Tensor변환
         inputs_lengths = torch.IntTensor(inputs_lengths)
         targets_lengths = torch.IntTensor(targets_lengths)
+
         # tbptt 진행시, 긴 시퀀스의 chunk로 진행이 되므로 training_step은 실질적으로 200 seq에 100 step chunk시
         # 1배치를 수행하기위해 2번의 training_step이 요구됩니다. (0~99, 100~199를 수행하기 위함)
         # 하지만, 새로운 배치에서의 hiddens은 이전과 연결되면 안되며, 매우 똑똑하게도, 새로운 batch_idx의 스텝시작시에는 hiddens는 None으로 처리됩니다.
         # 실험은 ./multi_network_tbptt_test.py로 해볼 수 있음.
+        logits = self(input_values, inputs_lengths, targets, targets_lengths)
 
-        # TODO: 뭔가 대충넣어도 bptt만 사용하면 가능한 시나리오에 loss가 전부 동일하게 떨어짐, 모델 학습 테스트 필요할듯
-        # 예를들어, transcription만 bptt 써본다던가, 다 써본다던가 하는....
-        logits, enc_dec_hiddens = self(input_values, inputs_lengths, targets, targets_lengths, hiddens)
+        # rnnt_loss에서는 lengths가 gpu에 올라가있어야 정상적으로 loss계산이 이루어진다.
+        # lengths를 Tensor로 변환하고, cuda로 올리는 연산, pad_packed때문에 gpu 활용율이 좋지않다.
+        inputs_lengths = inputs_lengths.cuda()
+        targets_lengths = targets_lengths.cuda()
         loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
 
         # sync_dist를 선언하는 것으로 ddp의 4장비에서 계산된 loss의 평균치를 async로 불러오도록 한다. (log할때만 집계됨)
-        self.log("train_loss_step", loss, sync_dist=True)
+        # self.log("train_loss_step", loss, sync_dist=True)
         # the training step must be updated to accept a ``hiddens`` argument
         # hiddens are the hiddens from the previous truncated backprop step
-        return {"loss": loss, "hiddens": enc_dec_hiddens}
+        return {"loss": loss}
+
+    def training_step_end(self, outputs):
+        # only use when  on dp
+        self.log("train_loss", outputs["loss"], sync_dist=True)
 
     def validation_step(self, batch, batch_idx):
         # validation에서의 tbptt는 필요없습니다. (역전파를 진행하지 않으므로)
         # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
         input_values, inputs_lengths, targets, targets_lengths = batch
+
         inputs_lengths = torch.IntTensor(inputs_lengths)
         targets_lengths = torch.IntTensor(targets_lengths)
-        logits, _ = self(input_values, inputs_lengths, targets, targets_lengths)
+        logits = self(input_values, inputs_lengths, targets, targets_lengths)
 
-        return {"logits": logits, "labels": targets}
+        inputs_lengths = inputs_lengths.cuda()
+        targets_lengths = targets_lengths.cuda()
+        loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
+
+        return {"logits": torch.argmax(logits[:, -1, :, :], -1), "labels": targets, "loss": loss}
 
     def validation_epoch_end(self, validation_step_outputs):
         # torch lightning은 약간의 데이터로 초기에 sanity eval step을 수행하고, training step에 돌입합니다.
         # 여기서도 기본적인 값은 찍어볼 수 있으므로, 1 에폭 간신히 돌려놓고 에러맞아서 멘붕오지말고 미리미리 체크하는 것도 좋겠네요
         # https://github.com/Lightning-AI/lightning/issues/2295 (trainer의 num_sanity_val_steps 옵션으로 끌 수도 있긴 함.)
-        each_steps_batched_logits = list()
-        each_steps_batched_labels = list()
-        for out in validation_step_outputs:
-            each_steps_batched_logits.append(out["logits"])
-            each_steps_batched_labels.append(out["labels"])
-
+        loss_mean = torch.cat([x["loss"] for x in validation_step_outputs]).mean()
         decoded_batch_preds = list()
-        # 우리가 기대하는 최종 문장은 time_sequence의 가장 마지막이어야 하므로, 가장 마지막 문장만 WER을 기록한다.
-        for each_batched_logits in each_steps_batched_logits:
-            # 각 배치의 가장 마지막 타임시퀀스 Token들만 구함
-            each_batched_last_seq_greedy_tokens = torch.argmax(each_batched_logits, -1)[:, -1, :]
-            # 각 배치의 가장 마지막 Token들만 decode
-            decoded_batch_preds.extend(self.tokenizer.batch_decode(each_batched_last_seq_greedy_tokens))
-
         decoded_batch_labels = list()
-        for each_batched_labels in each_steps_batched_labels:
-            decoded_batch_labels.extend(self.tokenizer.batch_decode(each_batched_labels))
+        for out in validation_step_outputs:
+            # 우리가 기대하는 최종 문장은 time_sequence의 가장 마지막이어야 하므로, 가장 마지막 문장만 WER을 기록한다.
+            for each_batched_logits in out["logits"]:
+                # 각 배치의 가장 마지막 타임시퀀스 Token들만 구함
+                decoded_batch_preds.append(self.tokenizer.decode(each_batched_logits))
+
+            for each_batched_labels in out["labels"]:
+                decoded_batch_labels.append(self.tokenizer.decode(each_batched_labels))
 
         # torchmetrics를 사용하는 경우, DistributedSampler가 각각 장비에서 동작하는 것으로 발생할 수 있는 비동기 문제에서 자유로워진다. (https://torchmetrics.readthedocs.io/en/stable/)
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
-        wer = metric_f.word_error_rate(decoded_batch_preds, decoded_batch_labels)
-        cer = metric_f.word_error_rate(decoded_batch_preds, decoded_batch_labels)
-        self.log("val_wer", wer)
-        self.log("val_cer", cer)
+        wer = self.calc_wer(decoded_batch_preds, decoded_batch_labels)
+        cer = self.calc_cer(decoded_batch_preds, decoded_batch_labels)
+        # sync_dist는 warning 안뜨게 하려고 그냥 넣었다.
+        self.log_dict({"val_wer": wer, "val_cer": cer}, sync_dist=True)
+        # val_loss의 경우 rnnt_loss로, torchmetrics가 아니어서 sync_dist를 사용해서 ddp 대응해야한다.
+        self.log("val_loss", loss_mean, sync_dist=True)
 
     @property
     def num_training_steps(self) -> int:
@@ -188,13 +151,16 @@ class RNNTransducer(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.args.learning_rate, weight_decay=self.args.weight_decay
+            [{"params": [p for p in self.parameters()], "name": "AdamW"}],
+            lr=self.args.learning_rate,
+            weight_decay=self.args.weight_decay,
         )
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=self.args.max_lr,
             steps_per_epoch=self.steps_per_epoch,
-            epochs=self.args.max_epochs,
+            epochs=self.trainer.max_epochs,
             pct_start=0.2,
         )
-        return [optimizer], [scheduler]
+        lr_scheduler = {"scheduler": scheduler, "name": "OneCycleLR"}
+        return [optimizer], [lr_scheduler]
