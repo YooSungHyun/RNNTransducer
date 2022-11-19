@@ -2,7 +2,7 @@ import torch
 import argparse
 import random
 from utils import read_json, str2bool
-from pytorch_lightning import Trainer
+import pytorch_lightning as pl
 from model import RNNTransducer
 from datamodule import RNNTransducerDataModule
 from pytorch_lightning.strategies import DDPStrategy
@@ -13,9 +13,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 def main(hparams):
     setproctitle("bart_online_stt")
-    random.seed(hparams.seed)
-    torch.manual_seed(hparams.seed)
-    torch.cuda.manual_seed_all(hparams.seed)
+    pl.seed_everything(hparams.seed)
 
     # DataModule의 prepare_data가 Main CPU에서만 동작하므로, 나머지 컴퓨팅 대상은 대기상태에 들어간다.
     # torch.distributed.init_process_group의 timeout은 30분으로, 대기를 30분 이상하면 자동으로 종료된다.
@@ -41,14 +39,14 @@ def main(hparams):
         filename="bart-online-{epoch:02d}-{val_wer:.4f}",
     )
     hparams.callbacks = [checkpoint_callback]
-    trainer = Trainer.from_argparse_args(hparams)
+    trainer = pl.Trainer.from_argparse_args(hparams)
     trainer.fit(model, datamodule=RNNT_datamodule)
     checkpoint_callback.best_model_path
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser = Trainer.add_argparse_args(parser)
+    parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument("--seed", default=None, type=int, help="all seed")
     parser.add_argument("--local_rank", type=int, help="ddp local rank")
     parser.add_argument("--hf_data_dirs", nargs="+", default=[], type=str, help="source HuggingFace data dirs")
