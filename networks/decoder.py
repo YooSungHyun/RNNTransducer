@@ -15,6 +15,7 @@
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
+import torch
 
 
 class TextPredNet(nn.Module):
@@ -85,10 +86,7 @@ class TextPredNet(nn.Module):
         self.out_proj = nn.Linear(hidden_size, output_size)
 
     def forward(
-        self,
-        inputs: Tensor,
-        input_lengths: Tensor = None,
-        prev_hidden_state: Tensor = None,
+        self, inputs: Tensor, input_lengths: Tensor = None, prev_hidden_state: Tensor = None
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward propage a `inputs` (targets) for training.
@@ -108,14 +106,24 @@ class TextPredNet(nn.Module):
                 ``(batch, seq_length, dimension)``
         """
         embedded = self.embedding(inputs)
-
+        # TODO 음성만 sorted되니, label은 따로 정렬해줘야함..;;
         if input_lengths is not None:
-            embedded = nn.utils.rnn.pack_padded_sequence(
-                embedded, input_lengths, batch_first=True, enforce_sorted=True
-            )
+            sorted_seq_lengths, indices = torch.sort(input_lengths, descending=True)
+            sorted_embedded = embedded[indices]
+            # pack_padded_sequence output : (data, batch_sizes)
+            # 잘 모르면 하단 참고: https://simonjisu.github.io/nlp/2018/07/05/packedsequence.html
+            # 해당 로직을 돌면, blank로 들어가야하는 맨앞 패딩도 맨 뒤로 이동되서 계산된다. 물론 pad_packed시 다시 blank는 원복한다.
+            # TODO blank도 학습되지 않아야하는 불필요값이므로, pad처럼 처리하고자 하나, 이게 맞는건지 다시 생각해봐야할지도?
+            packed_embedded = nn.utils.rnn.pack_padded_sequence(sorted_embedded, sorted_seq_lengths, batch_first=True)
+            # next line just pad_packed tested source code
+            # outputs = nn.utils.rnn.pad_packed_sequence(packed_embedded, batch_first=True)
             self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
-            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True, total_length=inputs.size(1))
+            outputs, hidden_states = self.rnn(packed_embedded, prev_hidden_state)
+            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
+            # indices로 역정렬해서, indices를 구하면 원본 array의 index순서대로 정렬된다.
+            _, desorted_indices = torch.sort(indices, descending=False)
+            # pack_padded했던거 원상복구
+            outputs = outputs[desorted_indices]
         else:
             self.rnn.flatten_parameters()
             outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
