@@ -75,16 +75,12 @@ class AudioTransNet(nn.Module):
         )
         self.out_proj = nn.Linear(2 * hidden_size if bidirectional else hidden_size, output_size)
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` for  encoder training.
 
         Args:
-            inputs (torch.FloatTensor): A input sequence passed to encoder. Typically for inputs this will be a padded
-                `FloatTensor` of size ``(batch, seq_length, dimension)``.
-            input_lengths (torch.LongTensor): The length of input tensor. ``(batch)``
-            pred_hidden_state (torch.FloatTensor): A previous hidden state of encoder. `FloatTensor` of size
-                ``(batch, seq_length, dimension)``
+            inputs (torch.FloatTensor): pack_sequence(inputs) not padded, but run pad_packed_sequence() -> output padded automatical
 
         Returns:
             (Tensor, Tensor)
@@ -93,19 +89,11 @@ class AudioTransNet(nn.Module):
                 ``(batch, seq_length, dimension)``
             * hidden_state (torch.LongTensor): The length of output tensor. ``(batch)``
         """
-        # inputs shape: (batch_size, seq, features)
-        if input_lengths is not None:
-            # enforce_sorted -> 내부에서 강제로 내림차순 정렬시킨다.
-            padded_inputs = nn.utils.rnn.pack_padded_sequence(
-                inputs, input_lengths, batch_first=True, enforce_sorted=True
-            )
-            # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
-            self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(padded_inputs)
-            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
-        else:
-            self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(inputs)
+        # inputs shape: (batch_size, seq, features)의 pack_padded_sequence가 진행된 값.
+        # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
+        self.rnn.flatten_parameters()
+        outputs, hidden_states = self.rnn(inputs)
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
 
         outputs = self.out_proj(outputs)
         """
