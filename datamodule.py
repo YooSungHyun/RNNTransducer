@@ -222,6 +222,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             pad_token_id=self.pad_token_id,
             n_mels=self.n_mels,
             sampler=train_sampler,
+            num_workers=self.num_proc,
         )
 
     def val_dataloader(self):
@@ -238,6 +239,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             pad_token_id=self.pad_token_id,
             n_mels=self.n_mels,
             sampler=val_sampler,
+            num_workers=self.num_proc,
         )
 
     def test_dataloader(self):
@@ -261,6 +263,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 pad_token_id=self.pad_token_id,
                 n_mels=self.n_mels,
                 sampler=clean_sampler,
+                num_workers=self.num_proc,
             ),
             AudioDataLoader(
                 dataset=self.other_datasets,
@@ -268,6 +271,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 pad_token_id=self.pad_token_id,
                 n_mels=self.n_mels,
                 sampler=other_sampler,
+                num_workers=self.num_proc,
             ),
         ]
 
