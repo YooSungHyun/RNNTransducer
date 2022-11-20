@@ -104,7 +104,7 @@ class TextPredNet(nn.Module):
         embedded = self.embedding(inputs)
         # 음성은 Smart Batching을 통해 정렬되므로, 바로 pack_sequence로 리소스를 아꼈지만, text는 embedding때문에 여기서 진행해야함.
         # .cpu()로 하면 디바이스 통신 발생하므로, list로 받은 뒤, 새로 선언해서 아예 cpu에 먼저 박아놓고 사용
-        input_lengths = torch.tensor(data=input_lengths, device="cpu").clone().detach()
+        input_lengths = torch.tensor(data=input_lengths, device="cpu")
         sorted_seq_lengths, indices = torch.sort(input_lengths, descending=True)
         sorted_embedded = embedded[indices]
         # pack_padded_sequence output : (data, batch_sizes)

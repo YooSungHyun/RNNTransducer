@@ -35,7 +35,6 @@ class AudioDataLoader(torch.utils.data.DataLoader):
                 )
             )
         text_lengths = [len(s) for s in input_texts]
-        text_lengths = torch.IntTensor(text_lengths)
         assert self.n_mels == batch[0]["input_values"].size(-1), "config의 feature shape과 실제 데이터의 feature가 다름"
         for s in range(len(target_lengths)):
             assert text_lengths[s] == target_lengths[s] + 1, "prednet의 Input은 targets_lengts에 +1(blank)여야 합니다. 데이터 오류!"
