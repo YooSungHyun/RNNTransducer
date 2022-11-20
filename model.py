@@ -26,8 +26,8 @@ class RNNTransducer(pl.LightningModule):
         jointnet_params["input_size"] = transnet_params["output_size"] + prednet_params["output_size"]
         self.jointnet = JointNet(transnet_params, prednet_params, **jointnet_params)
         self.rnnt_loss = RNNTLoss(blank=prednet_params["bos_token_id"], reduction="mean")
-        self.calc_wer = WordErrorRate()
-        self.calc_cer = CharErrorRate()
+        self.calc_wer = WordErrorRate(compute_on_cpu=False)
+        self.calc_cer = CharErrorRate(compute_on_cpu=False)
         # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
         self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
@@ -94,11 +94,13 @@ class RNNTransducer(pl.LightningModule):
         # validation에서의 tbptt는 필요없습니다. (역전파를 진행하지 않으므로)
         # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
         input_values, inputs_lengths, targets, targets_lengths = batch
-
         inputs_lengths = torch.IntTensor(inputs_lengths)
         targets_lengths = torch.IntTensor(targets_lengths)
+        # input_values = input_values.cpu()
+        # targets = targets.cpu()
+        # self.cpu()
         logits = self(input_values, inputs_lengths, targets, targets_lengths)
-
+        # self.cuda()
         inputs_lengths = inputs_lengths.cuda()
         targets_lengths = targets_lengths.cuda()
         loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
@@ -151,7 +153,7 @@ class RNNTransducer(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [{"params": [p for p in self.parameters()], "name": "AdamW"}],
+            [{"params": [p for p in self.parameters()], "name": "OneCycleLR"}],
             lr=self.args.learning_rate,
             weight_decay=self.args.weight_decay,
         )
@@ -160,7 +162,7 @@ class RNNTransducer(pl.LightningModule):
             max_lr=self.args.max_lr,
             steps_per_epoch=self.steps_per_epoch,
             epochs=self.trainer.max_epochs,
-            pct_start=0.2,
+            pct_start=0.05,
         )
-        lr_scheduler = {"scheduler": scheduler, "name": "OneCycleLR"}
+        lr_scheduler = {"interval": "step", "scheduler": scheduler, "name": "AdamW"}
         return [optimizer], [lr_scheduler]
