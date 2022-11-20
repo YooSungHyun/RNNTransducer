@@ -41,4 +41,6 @@ class AudioDataLoader(torch.utils.data.DataLoader):
         input_texts = pad_sequence(input_texts, batch_first=True, padding_value=self.pad_token_id)
         targets = pad_sequence(targets, batch_first=True, padding_value=self.pad_token_id)
 
+        # input_texts, targets, audio_lengths, target_lengths: on_cuda
+        # input_audios, text_lengths : on_cpu or not tensor
         return input_audios, audio_lengths, input_texts, text_lengths, targets, target_lengths

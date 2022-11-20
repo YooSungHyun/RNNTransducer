@@ -37,15 +37,25 @@ class JointNet(nn.Module):
     """
 
     def __init__(
-        self, transnet_params: dict, prednet_params: dict, num_classes: int, input_size: int, forward_output_size: int
+        self,
+        transnet_params: dict,
+        prednet_params: dict,
+        num_classes: int,
+        input_size: int,
+        forward_output_size: int,
+        act_func: str = "",
     ):
         super(JointNet, self).__init__()
         self.encoder = AudioTransNet(**transnet_params)
         self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
-        self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
-        self.gelu = nn.GELU(approximate="tanh")
-
+        self.act_func_name = act_func.lower()
+        if self.act_func_name == "glu":
+            self.forward_layer = nn.Linear(input_size, forward_output_size * 2, bias=True)
+            self.act_func = nn.GLU()
+        elif self.act_func_name == "gelu":
+            self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
+            self.act_func = nn.GELU(approximate="tanh")
         self.fc = nn.Linear(forward_output_size, num_classes, bias=False)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
@@ -73,9 +83,12 @@ class JointNet(nn.Module):
 
         outputs = torch.cat((encoder_outputs, decoder_outputs), dim=-1)
         # forward_layer는 논문에서 다뤄지는 내용은 아니나, 두개를 concat하면 길어지니, 예측에 중요한 특성을 한번 더 필터링 하기 위함
-        outputs = self.forward_layer(outputs)
+        # 그냥 다 넣는게 잘될지도 모르고 테스트 해봐야겠음.
+        if self.act_func_name:
+            outputs = self.forward_layer(outputs)
+            outputs = self.act_func(outputs)
         # 마이너스로 많이 가는 값이 있으면 tanh가 더 안정적일 수 있음, 다만 tanh 근사 시키기때문에 gelu도 잘되지 않을까 판단해봄.
-        outputs = self.gelu(outputs)
+        # outputs = self.gelu(outputs)
         outputs = self.fc(outputs)
 
         return outputs

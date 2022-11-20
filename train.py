@@ -91,5 +91,11 @@ if __name__ == "__main__":
         type=str2bool,
         help="The batch size per GPU/TPU core/CPU for training.",
     )
+    parser.add_argument(
+        "--val_on_cpu",
+        default=False,
+        type=str2bool,
+        help="If you want to run validation_step on cpu -> true",
+    )
     args = parser.parse_args()
     main(args)

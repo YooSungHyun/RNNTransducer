@@ -19,7 +19,8 @@
         },
         "jointnet": {
             "num_classes": 72,
-            "forward_output_size": 512
+            "forward_output_size": 512,
+            "act_func": "glu"
         }
     },
     "data": {

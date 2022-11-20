@@ -31,11 +31,20 @@ class RNNTransducer(pl.LightningModule):
         self.jointnet = JointNet(transnet_params, prednet_params, **jointnet_params)
         # Joint Net의 repeat concat 때문에 발생하는 메모리 커지는 이슈를 조금이라도 쉽게 타개하기 위함.
         if args.precision == 16:
+            # precision 16의 경우 GPU 할당이 2배 여유가 생기므로 그냥 싹다 GPU에서 수행
+            compute_on_cpu = False
             self.rnnt_loss = Torch_RNNTLoss(blank=self.tokenizer.bos_token_id, reduction="mean")
         else:
+            if args.val_on_cpu:
+                compute_on_cpu = True
+            else:
+                # precision이 16도 아니면서 val_on_cpu를 선택한다? (3090에서도 동작안함.)
+                print("32비트 이상이라면, 무조건 compute_on_cpu는 True입니다. (리소스 효율을 위함)")
+                compute_on_cpu = True
             self.rnnt_loss = Warp_RNNTLoss(blank=self.tokenizer.bos_token_id, reduction="mean")
-        self.calc_wer = WordErrorRate(compute_on_cpu=False)
-        self.calc_cer = CharErrorRate(compute_on_cpu=False)
+
+        self.calc_wer = WordErrorRate(compute_on_cpu=compute_on_cpu)
+        self.calc_cer = CharErrorRate(compute_on_cpu=compute_on_cpu)
         # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
         # Important: This property activates truncated backpropagation through time
@@ -71,14 +80,17 @@ class RNNTransducer(pl.LightningModule):
         5) input data is not in PackedSequence format persistent algorithm
         can be selected to improve performance.
         """
+        # input_texts, targets, audio_lengths, target_lengths: on_cuda
+        # input_audios, text_lengths : on_cpu or not tensor
         input_audios, audio_lengths, input_texts, text_lengths, targets, target_lengths = batch
 
         # tbptt 진행시, 긴 시퀀스의 chunk로 진행이 되므로 training_step은 실질적으로 200 seq에 100 step chunk시
         # 1배치를 수행하기위해 2번의 training_step이 요구됩니다. (0~99, 100~199를 수행하기 위함)
         # 하지만, 새로운 배치에서의 hiddens은 이전과 연결되면 안되며, 매우 똑똑하게도, 새로운 batch_idx의 스텝시작시에는 hiddens는 None으로 처리됩니다.
         # 실험은 ./multi_network_tbptt_test.py로 해볼 수 있음.
-        input_audios = pack_sequence(input_audios)
-        logits = self(input_audios, input_texts, text_lengths)
+
+        input_audios = pack_sequence(input_audios)  # input_audio: list -> cuda
+        logits = self(input_audios, input_texts, text_lengths)  # text_lengths must list or cpu cuda (list)
         loss = self.rnnt_loss(logits, targets, audio_lengths, target_lengths)
 
         # sync_dist를 선언하는 것으로 ddp의 4장비에서 계산된 loss의 평균치를 async로 불러오도록 한다. (log할때만 집계됨)
@@ -89,6 +101,7 @@ class RNNTransducer(pl.LightningModule):
 
     def training_step_end(self, outputs):
         # only use when  on dp
+        assert not self.args.move_metrics_to_cpu, "DDP만을 지원하므로, cpu로 metric이동되면 gather가 동작하지 않습니다."
         self.log("train_loss", outputs["loss"], sync_dist=True)
 
     def validation_step(self, batch, batch_idx):
@@ -96,25 +109,28 @@ class RNNTransducer(pl.LightningModule):
         # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
         input_audios, audio_lengths, input_texts, text_lengths, targets, target_lengths = batch
 
-        # TODO: valid_on_cpu 등의 플래그를 참고해서, eval logits을 cuda혹은 cpu에서 선택적으로 사용 가능하게 할 것
-        # input_values = input_values.cpu()
-        # targets = targets.cpu()
-        # self.cpu()
-
         # pad를 채우지 않고, 바로 pack 시키는 전략을 취함. audio는 스마트배칭으로, sort를 다시 할 필요가 없음
         input_audios = pack_sequence(input_audios)
+        if self.args.val_on_cpu or self.args.precision > 16:
+            audio_lengths = audio_lengths.cpu()
+            input_texts = input_texts.cpu()
+            targets = targets.cpu()
+            target_lengths = target_lengths.cpu()
+            input_audios = input_audios.cpu()
+            self.cpu()
+
         logits = self(input_audios, input_texts, text_lengths)
-        # self.cuda()
         loss = self.rnnt_loss(logits, targets, audio_lengths, target_lengths)
 
         return {"logits": torch.argmax(logits[:, -1, :, :], -1), "labels": targets, "loss": loss}
 
     def validation_epoch_end(self, validation_step_outputs):
+        assert not self.args.move_metrics_to_cpu, "DDP만을 지원하므로, cpu로 metric이동되면 gather가 동작하지 않습니다."
         # torch lightning은 약간의 데이터로 초기에 sanity eval step을 수행하고, training step에 돌입합니다.
         # 여기서도 기본적인 값은 찍어볼 수 있으므로, 1 에폭 간신히 돌려놓고 에러맞아서 멘붕오지말고 미리미리 체크하는 것도 좋겠네요
         # https://github.com/Lightning-AI/lightning/issues/2295 (trainer의 num_sanity_val_steps 옵션으로 끌 수도 있긴 함.)
         if self.precision == 16:
-            # 16 float의 경우 torch audio를 활용하는데, 그 경우 torch value가 튀어나옴.
+            # float16의 경우 torch audio를 활용하는데, 그 경우 torch value가 튀어나옴.
             loss_mean = torch.Tensor([x["loss"] for x in validation_step_outputs]).mean()
         else:
             # warp_transducer의 loss를 활용하는경우 torch 1차원 list가 튀어나옴
@@ -134,10 +150,18 @@ class RNNTransducer(pl.LightningModule):
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
         wer = self.calc_wer(decoded_batch_preds, decoded_batch_labels)
         cer = self.calc_cer(decoded_batch_preds, decoded_batch_labels)
-        # sync_dist는 warning 안뜨게 하려고 그냥 넣었다.
-        self.log_dict({"val_wer": wer, "val_cer": cer}, sync_dist=True)
-        # val_loss의 경우 rnnt_loss로, torchmetrics가 아니어서 sync_dist를 사용해서 ddp 대응해야한다.
-        self.log("val_loss", loss_mean, sync_dist=True)
+        if not self.on_gpu:
+            # 이 곳에 빠지는 경우는, val_on_cpu가 True인 경우여야만 한다. 혹은 precision이 16 이상임.
+            # nccl의 경우, allreduce는 cuda에 있어야 정상동작하므로 cpu output을 cuda로 바꿈
+            self.log_dict(
+                {"val_wer": wer.cuda(), "val_cer": cer.cuda()}, sync_dist=True
+            )  # torchmetrics라 sync_dist는 사실 필요없다.
+            self.log("val_loss", loss_mean.cuda(), sync_dist=True)  # torchmetrics가 아니므로 sync_dist 필수
+            # training_step에서는 gpu로 올려줘야, all_gather가 정상동작함.
+            self.cuda()
+        else:
+            self.log_dict({"val_wer": wer, "val_cer": cer}, sync_dist=True)
+            self.log("val_loss", loss_mean, sync_dist=True)
 
     @property
     def num_training_steps(self) -> int:
