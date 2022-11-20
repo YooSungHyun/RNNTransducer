@@ -95,8 +95,12 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         # Use for inference only (separate from training_step)
+        if targets.is_cuda:
+            device = "cuda"
+        else:
+            device = "cpu"
         # labels의 dim을 2차원으로 배치만큼 세움
-        first_bos_token_id = torch.full((targets.size(0), 1), self.decoder.bos_token_id, device="cuda")
+        first_bos_token_id = torch.full((targets.size(0), 1), self.decoder.bos_token_id, device=device)
         # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
         targets_add_blank = torch.cat((first_bos_token_id, targets), dim=1)
 
