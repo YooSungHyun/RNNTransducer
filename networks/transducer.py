@@ -80,7 +80,7 @@ class JointNet(nn.Module):
 
         return outputs
 
-    def forward(self, inputs: Tensor, inputs_lengths: Tensor, targets: Tensor, targets_lengths: Tensor) -> Tensor:
+    def forward(self, input_audios: Tensor, input_texts: Tensor, text_lengths: Tensor) -> Tensor:
         """
         Forward propagate a `inputs` and `targets` pair for training.
 
@@ -95,14 +95,8 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         # Use for inference only (separate from training_step)
-        # labels의 dim을 2차원으로 배치만큼 세움
-        first_bos_token_id = torch.full((targets.size(0), 1), self.decoder.bos_token_id, device="cuda")
-        # 각 타겟별 맨 처음에 blank 토큰인 0을 채우게됨
-        targets_add_blank = torch.cat((first_bos_token_id, targets), dim=1)
-
-        enc_state, _ = self.encoder(inputs, inputs_lengths)
-        # targets_lengths는 어짜피 sort에만 쓰이므로 꼭 +1 해줄 필요는 없는데, 데이터 일치성을 위해서 그냥 시켰다.
-        dec_state, _ = self.decoder(targets_add_blank, targets_lengths + 1)
+        enc_state, _ = self.encoder(input_audios)
+        dec_state, _ = self.decoder(input_texts, text_lengths)
         outputs = self.joint(enc_state, dec_state)
         return outputs
 
@@ -147,7 +141,7 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         outputs = list()
-
+        # TODO inputs를 padded_pack 시키거나, 이전에서 그렇게 해서 받아야함.
         encoder_outputs, encoder_hiddens = self.encoder(inputs, input_lengths)
         max_length = encoder_outputs.size(1)
 

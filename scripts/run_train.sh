@@ -1,6 +1,7 @@
 #!/bin/bash
 GPU_IDS=
-HF_DATA_DIRS=""
+HF_DATA_DIRS="
+"
 PL_DATA_DIR=""
 
 OMP_NUM_THREADS=8 \
@@ -23,6 +24,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node= ../train.py \
     --log_every_n_steps=100 \
     --accelerator=gpu \
     --strategy=ddp \
+    --replace_sampler_ddp=false \
     --devices=2 \
     --auto_scale_batch_size=false \
     --learning_rate=0.00001 \

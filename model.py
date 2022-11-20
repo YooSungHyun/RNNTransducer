@@ -2,9 +2,11 @@ import torch
 import pytorch_lightning as pl
 from networks import JointNet
 from argparse import Namespace
-from warprnnt_pytorch import RNNTLoss
+from warprnnt_pytorch import RNNTLoss as Warp_RNNTLoss
+from torchaudio.transforms import RNNTLoss as Torch_RNNTLoss
 from torchmetrics import WordErrorRate, CharErrorRate
 from transformers import Wav2Vec2CTCTokenizer
+from torch.nn.utils.rnn import pack_sequence
 
 
 class RNNTransducer(pl.LightningModule):
@@ -22,14 +24,19 @@ class RNNTransducer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.args = args
+        self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
+        prednet_params["pad_token_id"] = self.tokenizer.pad_token_id
         # 다른 Transducer 쓰고싶으면 여기서 En,Decoder만 변경해서 사용
         jointnet_params["input_size"] = transnet_params["output_size"] + prednet_params["output_size"]
         self.jointnet = JointNet(transnet_params, prednet_params, **jointnet_params)
-        self.rnnt_loss = RNNTLoss(blank=prednet_params["bos_token_id"], reduction="mean")
-        self.calc_wer = WordErrorRate()
-        self.calc_cer = CharErrorRate()
+        # Joint Net의 repeat concat 때문에 발생하는 메모리 커지는 이슈를 조금이라도 쉽게 타개하기 위함.
+        if args.precision == 16:
+            self.rnnt_loss = Torch_RNNTLoss(blank=self.tokenizer.bos_token_id, reduction="mean")
+        else:
+            self.rnnt_loss = Warp_RNNTLoss(blank=self.tokenizer.bos_token_id, reduction="mean")
+        self.calc_wer = WordErrorRate(compute_on_cpu=False)
+        self.calc_cer = CharErrorRate(compute_on_cpu=False)
         # CTC 사용편의성이 좋은 HuggingFace Transformers를 활용하였습니다. (Tokenizer 만들기 귀찮...)
-        self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
         # Truncated Backpropagation Through Time (https://pytorch-lightning.readthedocs.io/en/stable/guides/data.html)
         # Important: This property activates truncated backpropagation through time
         # Setting this value to 2 splits the batch into sequences of size 2
@@ -46,8 +53,9 @@ class RNNTransducer(pl.LightningModule):
         # 자세한 사항은 README 참고
         # self.truncated_bptt_steps = 1
 
-    def forward(self, inputs, inputs_lengths, targets, targets_lengths):
-        logits = self.jointnet(inputs, inputs_lengths, targets, targets_lengths)
+    def forward(self, input_audios, input_texts, text_lengths):
+
+        logits = self.jointnet(input_audios, input_texts, text_lengths)
         return logits
 
     def training_step(self, batch, batch_idx):
@@ -63,22 +71,15 @@ class RNNTransducer(pl.LightningModule):
         5) input data is not in PackedSequence format persistent algorithm
         can be selected to improve performance.
         """
-        input_values, inputs_lengths, targets, targets_lengths = batch
-        # collate에서 나올때는, torch로 넘기면 자동으로 GPU로 넘어가게 되어서, pad_packed를 위한 lengths는 여기서 Tensor변환
-        inputs_lengths = torch.IntTensor(inputs_lengths)
-        targets_lengths = torch.IntTensor(targets_lengths)
+        input_audios, audio_lengths, input_texts, text_lengths, targets, target_lengths = batch
 
         # tbptt 진행시, 긴 시퀀스의 chunk로 진행이 되므로 training_step은 실질적으로 200 seq에 100 step chunk시
         # 1배치를 수행하기위해 2번의 training_step이 요구됩니다. (0~99, 100~199를 수행하기 위함)
         # 하지만, 새로운 배치에서의 hiddens은 이전과 연결되면 안되며, 매우 똑똑하게도, 새로운 batch_idx의 스텝시작시에는 hiddens는 None으로 처리됩니다.
         # 실험은 ./multi_network_tbptt_test.py로 해볼 수 있음.
-        logits = self(input_values, inputs_lengths, targets, targets_lengths)
-
-        # rnnt_loss에서는 lengths가 gpu에 올라가있어야 정상적으로 loss계산이 이루어진다.
-        # lengths를 Tensor로 변환하고, cuda로 올리는 연산, pad_packed때문에 gpu 활용율이 좋지않다.
-        inputs_lengths = inputs_lengths.cuda()
-        targets_lengths = targets_lengths.cuda()
-        loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
+        input_audios = pack_sequence(input_audios)
+        logits = self(input_audios, input_texts, text_lengths)
+        loss = self.rnnt_loss(logits, targets, audio_lengths, target_lengths)
 
         # sync_dist를 선언하는 것으로 ddp의 4장비에서 계산된 loss의 평균치를 async로 불러오도록 한다. (log할때만 집계됨)
         # self.log("train_loss_step", loss, sync_dist=True)
@@ -93,15 +94,18 @@ class RNNTransducer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         # validation에서의 tbptt는 필요없습니다. (역전파를 진행하지 않으므로)
         # 때문에 한번의 valid step의 모든 seq가 들어가야 합니다.
-        input_values, inputs_lengths, targets, targets_lengths = batch
+        input_audios, audio_lengths, input_texts, text_lengths, targets, target_lengths = batch
 
-        inputs_lengths = torch.IntTensor(inputs_lengths)
-        targets_lengths = torch.IntTensor(targets_lengths)
-        logits = self(input_values, inputs_lengths, targets, targets_lengths)
+        # TODO: valid_on_cpu 등의 플래그를 참고해서, eval logits을 cuda혹은 cpu에서 선택적으로 사용 가능하게 할 것
+        # input_values = input_values.cpu()
+        # targets = targets.cpu()
+        # self.cpu()
 
-        inputs_lengths = inputs_lengths.cuda()
-        targets_lengths = targets_lengths.cuda()
-        loss = self.rnnt_loss(logits, targets, inputs_lengths, targets_lengths)
+        # pad를 채우지 않고, 바로 pack 시키는 전략을 취함. audio는 스마트배칭으로, sort를 다시 할 필요가 없음
+        input_audios = pack_sequence(input_audios)
+        logits = self(input_audios, input_texts, text_lengths)
+        # self.cuda()
+        loss = self.rnnt_loss(logits, targets, audio_lengths, target_lengths)
 
         return {"logits": torch.argmax(logits[:, -1, :, :], -1), "labels": targets, "loss": loss}
 
@@ -109,7 +113,12 @@ class RNNTransducer(pl.LightningModule):
         # torch lightning은 약간의 데이터로 초기에 sanity eval step을 수행하고, training step에 돌입합니다.
         # 여기서도 기본적인 값은 찍어볼 수 있으므로, 1 에폭 간신히 돌려놓고 에러맞아서 멘붕오지말고 미리미리 체크하는 것도 좋겠네요
         # https://github.com/Lightning-AI/lightning/issues/2295 (trainer의 num_sanity_val_steps 옵션으로 끌 수도 있긴 함.)
-        loss_mean = torch.cat([x["loss"] for x in validation_step_outputs]).mean()
+        if self.precision == 16:
+            # 16 float의 경우 torch audio를 활용하는데, 그 경우 torch value가 튀어나옴.
+            loss_mean = torch.Tensor([x["loss"] for x in validation_step_outputs]).mean()
+        else:
+            # warp_transducer의 loss를 활용하는경우 torch 1차원 list가 튀어나옴
+            loss_mean = torch.cat([x["loss"] for x in validation_step_outputs]).mean()
         decoded_batch_preds = list()
         decoded_batch_labels = list()
         for out in validation_step_outputs:
@@ -149,9 +158,26 @@ class RNNTransducer(pl.LightningModule):
     def steps_per_epoch(self) -> int:
         return self.num_training_steps // self.trainer.max_epochs
 
+    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, **kwargs):
+        self.should_skip_lr_scheduler_step = False
+        scaler = getattr(self.trainer.strategy.precision_plugin, "scaler", None)
+        if scaler:
+            scale_before_step = scaler.get_scale()
+        optimizer.step(closure=optimizer_closure)
+        if scaler:
+            scale_after_step = scaler.get_scale()
+            self.should_skip_lr_scheduler_step = scale_before_step > scale_after_step
+
+    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
+    def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
+        if self.should_skip_lr_scheduler_step:
+            return
+        scheduler.step()
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [{"params": [p for p in self.parameters()], "name": "AdamW"}],
+            [{"params": [p for p in self.parameters()], "name": "OneCycleLR"}],
             lr=self.args.learning_rate,
             weight_decay=self.args.weight_decay,
         )
@@ -160,7 +186,7 @@ class RNNTransducer(pl.LightningModule):
             max_lr=self.args.max_lr,
             steps_per_epoch=self.steps_per_epoch,
             epochs=self.trainer.max_epochs,
-            pct_start=0.2,
+            pct_start=0.05,
         )
-        lr_scheduler = {"scheduler": scheduler, "name": "OneCycleLR"}
+        lr_scheduler = {"interval": "step", "scheduler": scheduler, "name": "AdamW"}
         return [optimizer], [lr_scheduler]

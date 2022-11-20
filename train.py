@@ -33,6 +33,7 @@ def main(hparams):
 
     wandb_logger.watch(model, log="all")
     hparams.logger = wandb_logger
+    # hparams.profiler = "simple"
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.output_dir,

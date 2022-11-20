@@ -30,6 +30,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         self.per_device_eval_batch_size = args.per_device_eval_batch_size
         self.num_proc = args.num_proc
         self.pad_token_id = config["audio"]["pad_token_id"]
+        self.bos_token_id = config["text"]["bos_token_id"]
         self.window_stride_sec = config["audio"]["window_stride_sec"]
         self.window_size_sec = config["audio"]["window_size_sec"]
         self.sample_rate = config["audio"]["sample_rate"]
@@ -220,8 +221,11 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             dataset=self.train_datasets,
             batch_size=self.per_device_train_batch_size,
             pad_token_id=self.pad_token_id,
+            bos_token_id=self.bos_token_id,
             n_mels=self.n_mels,
             sampler=train_sampler,
+            num_workers=self.num_proc,
+            pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -236,8 +240,11 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             dataset=self.val_datasets,
             batch_size=self.per_device_eval_batch_size,
             pad_token_id=self.pad_token_id,
+            bos_token_id=self.bos_token_id,
             n_mels=self.n_mels,
             sampler=val_sampler,
+            num_workers=self.num_proc,
+            pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -259,15 +266,21 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 dataset=self.clean_datasets,
                 batch_size=1,
                 pad_token_id=self.pad_token_id,
+                bos_token_id=self.bos_token_id,
                 n_mels=self.n_mels,
                 sampler=clean_sampler,
+                num_workers=self.num_proc,
+                pin_memory=True,
             ),
             AudioDataLoader(
                 dataset=self.other_datasets,
                 batch_size=1,
                 pad_token_id=self.pad_token_id,
+                bos_token_id=self.bos_token_id,
                 n_mels=self.n_mels,
                 sampler=other_sampler,
+                num_workers=self.num_proc,
+                pin_memory=True,
             ),
         ]
 

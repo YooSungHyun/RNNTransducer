@@ -58,21 +58,16 @@ class TextPredNet(nn.Module):
     def __init__(
         self,
         embedding_size: int,
+        pad_token_id: int,
         hidden_size: int,
         output_size: int,
         num_layers: int,
         rnn_type: str = "lstm",
-        pad_token_id: int = 0,
-        bos_token_id: int = 2,
-        eos_token_id: int = 3,
         dropout: float = 0.2,
     ):
         super(TextPredNet, self).__init__()
         self.hidden_size = hidden_size
-        self.pad_token_id = pad_token_id
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
-        self.embedding = nn.Embedding(embedding_size, hidden_size, padding_idx=self.pad_token_id)
+        self.embedding = nn.Embedding(embedding_size, hidden_size, padding_idx=pad_token_id)
         rnn_cell = self.supported_rnns[rnn_type.lower()]
         self.rnn = rnn_cell(
             input_size=hidden_size,
@@ -105,28 +100,27 @@ class TextPredNet(nn.Module):
             * hidden_states (torch.FloatTensor): A hidden state of decoder. `FloatTensor` of size
                 ``(batch, seq_length, dimension)``
         """
+        assert input_lengths is not None, "decoder의 pad_packed을 위한 lengths list 누락!"
         embedded = self.embedding(inputs)
-        # TODO 음성만 sorted되니, label은 따로 정렬해줘야함..;;
-        if input_lengths is not None:
-            sorted_seq_lengths, indices = torch.sort(input_lengths, descending=True)
-            sorted_embedded = embedded[indices]
-            # pack_padded_sequence output : (data, batch_sizes)
-            # 잘 모르면 하단 참고: https://simonjisu.github.io/nlp/2018/07/05/packedsequence.html
-            # 해당 로직을 돌면, blank로 들어가야하는 맨앞 패딩도 맨 뒤로 이동되서 계산된다. 물론 pad_packed시 다시 blank는 원복한다.
-            # TODO blank도 학습되지 않아야하는 불필요값이므로, pad처럼 처리하고자 하나, 이게 맞는건지 다시 생각해봐야할지도?
-            packed_embedded = nn.utils.rnn.pack_padded_sequence(sorted_embedded, sorted_seq_lengths, batch_first=True)
-            # next line just pad_packed tested source code
-            # outputs = nn.utils.rnn.pad_packed_sequence(packed_embedded, batch_first=True)
-            self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(packed_embedded, prev_hidden_state)
-            outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
-            # indices로 역정렬해서, indices를 구하면 원본 array의 index순서대로 정렬된다.
-            _, desorted_indices = torch.sort(indices, descending=False)
-            # pack_padded했던거 원상복구
-            outputs = outputs[desorted_indices]
-        else:
-            self.rnn.flatten_parameters()
-            outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
+        # 음성은 Smart Batching을 통해 정렬되므로, 바로 pack_sequence로 리소스를 아꼈지만, text는 embedding때문에 여기서 진행해야함.
+        # .cpu()로 하면 디바이스 통신 발생하므로, list로 받은 뒤, 새로 선언해서 아예 cpu에 먼저 박아놓고 사용
+        input_lengths = torch.tensor(data=input_lengths, device="cpu")
+        sorted_seq_lengths, indices = torch.sort(input_lengths, descending=True)
+        sorted_embedded = embedded[indices]
+        # pack_padded_sequence output : (data, batch_sizes)
+        # 잘 모르면 하단 참고: https://simonjisu.github.io/nlp/2018/07/05/packedsequence.html
+        # 해당 로직을 돌면, blank로 들어가야하는 맨앞 패딩도 맨 뒤로 이동되서 계산된다. 물론 pad_packed시 다시 blank는 원복한다.
+        # TODO blank도 학습되지 않아야하는 불필요값이므로, pad처럼 처리하고자 하나, 이게 맞는건지 다시 생각해봐야할지도?
+        packed_embedded = nn.utils.rnn.pack_padded_sequence(sorted_embedded, sorted_seq_lengths, batch_first=True)
+        # next line just pad_packed tested source code
+        # outputs = nn.utils.rnn.pad_packed_sequence(packed_embedded, batch_first=True)
+        self.rnn.flatten_parameters()
+        outputs, hidden_states = self.rnn(packed_embedded, prev_hidden_state)
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
+        # indices로 역정렬해서, indices를 구하면 원본 array의 index순서대로 정렬된다.
+        _, desorted_indices = torch.sort(indices, descending=False)
+        # pack_padded했던거 원상복구
+        outputs = outputs[desorted_indices]
         outputs = self.out_proj(outputs)
 
         return outputs, hidden_states

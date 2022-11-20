@@ -15,9 +15,6 @@
             "output_size": 512,
             "num_layers": 2,
             "rnn_type": "lstm",
-            "pad_token_id": 0,
-            "bos_token_id": 2,
-            "eos_token_id": 3,
             "dropout": 0.2
         },
         "jointnet": {
@@ -40,6 +37,10 @@
             "freq_mask_cnt": 1,
             "pad_token_id": 0
         },
-        "text": {}
+        "text": {
+            "pad_token_id": 0,
+            "bos_token_id": 2,
+            "eos_token_id": 3
+        }
     }
 }
