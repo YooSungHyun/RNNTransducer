@@ -22,7 +22,7 @@ class RNNTransducer(pl.LightningModule):
     # datamodule setup 끝 -> configure_optimizers -> dataloader(collate_fn)
     def __init__(self, prednet_params: dict, transnet_params: dict, jointnet_params: dict, args: Namespace):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(prednet_params, transnet_params, jointnet_params, args)
         self.args = args
         self.tokenizer = Wav2Vec2CTCTokenizer(vocab_file=args.vocab_path)
         prednet_params["pad_token_id"] = self.tokenizer.pad_token_id
@@ -122,7 +122,7 @@ class RNNTransducer(pl.LightningModule):
         logits = self(input_audios, input_texts, text_lengths)
         loss = self.rnnt_loss(logits, targets, audio_lengths, target_lengths)
 
-        return {"logits": torch.argmax(logits[:, -1, :, :], -1), "labels": targets, "loss": loss}
+        return {"loss": loss}
 
     def validation_epoch_end(self, validation_step_outputs):
         assert not self.args.move_metrics_to_cpu, "DDP만을 지원하므로, cpu로 metric이동되면 gather가 동작하지 않습니다."
@@ -135,69 +135,35 @@ class RNNTransducer(pl.LightningModule):
         else:
             # warp_transducer의 loss를 활용하는경우 torch 1차원 list가 튀어나옴
             loss_mean = torch.cat([x["loss"] for x in validation_step_outputs]).mean()
-        decoded_batch_preds = list()
-        decoded_batch_labels = list()
-        for out in validation_step_outputs:
-            # 우리가 기대하는 최종 문장은 time_sequence의 가장 마지막이어야 하므로, 가장 마지막 문장만 WER을 기록한다.
-            for each_batched_logits in out["logits"]:
-                # 각 배치의 가장 마지막 타임시퀀스 Token들만 구함
-                decoded_batch_preds.append(self.tokenizer.decode(each_batched_logits))
-
-            for each_batched_labels in out["labels"]:
-                decoded_batch_labels.append(self.tokenizer.decode(each_batched_labels))
 
         # torchmetrics를 사용하는 경우, DistributedSampler가 각각 장비에서 동작하는 것으로 발생할 수 있는 비동기 문제에서 자유로워진다. (https://torchmetrics.readthedocs.io/en/stable/)
         # torchmetrics를 사용하지 않을경우, self.log(sync_dist) 등을 사용하여 따로 처리해줘야함. (https://github.com/Lightning-AI/lightning/discussions/6501)
-        wer = self.calc_wer(decoded_batch_preds, decoded_batch_labels)
-        cer = self.calc_cer(decoded_batch_preds, decoded_batch_labels)
         if not self.on_gpu:
             # 이 곳에 빠지는 경우는, val_on_cpu가 True인 경우여야만 한다. 혹은 precision이 16 이상임.
             # nccl의 경우, allreduce는 cuda에 있어야 정상동작하므로 cpu output을 cuda로 바꿈
-            self.log_dict(
-                {"val_wer": wer.cuda(), "val_cer": cer.cuda()}, sync_dist=True
-            )  # torchmetrics라 sync_dist는 사실 필요없다.
             self.log("val_loss", loss_mean.cuda(), sync_dist=True)  # torchmetrics가 아니므로 sync_dist 필수
             # training_step에서는 gpu로 올려줘야, all_gather가 정상동작함.
             self.cuda()
         else:
-            self.log_dict({"val_wer": wer, "val_cer": cer}, sync_dist=True)
+            # 이미 cuda면 그냥 던짐
             self.log("val_loss", loss_mean, sync_dist=True)
 
-    @property
-    def num_training_steps(self) -> int:
-        """Total training steps inferred from datamodule and devices."""
-        if self.trainer.max_steps > 0:
-            return self.trainer.max_steps
-
-        limit_batches = self.trainer.limit_train_batches
-        batches = len(self.trainer.datamodule.train_dataloader())
-        batches = min(batches, limit_batches) if isinstance(limit_batches, int) else int(limit_batches * batches)
-
-        num_devices = max(1, self.trainer.num_devices)
-
-        effective_accum = self.trainer.accumulate_grad_batches * num_devices
-        return (batches // effective_accum) * self.trainer.max_epochs
-
-    @property
-    def steps_per_epoch(self) -> int:
-        return self.num_training_steps // self.trainer.max_epochs
+    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
+    # def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, **kwargs):
+    #     self.should_skip_lr_scheduler_step = False
+    #     scaler = getattr(self.trainer.strategy.precision_plugin, "scaler", None)
+    #     if scaler:
+    #         scale_before_step = scaler.get_scale()
+    #     optimizer.step(closure=optimizer_closure)
+    #     if scaler:
+    #         scale_after_step = scaler.get_scale()
+    #         self.should_skip_lr_scheduler_step = scale_before_step > scale_after_step
 
     # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
-    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, **kwargs):
-        self.should_skip_lr_scheduler_step = False
-        scaler = getattr(self.trainer.strategy.precision_plugin, "scaler", None)
-        if scaler:
-            scale_before_step = scaler.get_scale()
-        optimizer.step(closure=optimizer_closure)
-        if scaler:
-            scale_after_step = scaler.get_scale()
-            self.should_skip_lr_scheduler_step = scale_before_step > scale_after_step
-
-    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
-    def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
-        if self.should_skip_lr_scheduler_step:
-            return
-        scheduler.step()
+    # def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
+    #     if self.should_skip_lr_scheduler_step:
+    #         return
+    #     scheduler.step()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -208,9 +174,33 @@ class RNNTransducer(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=self.args.max_lr,
-            steps_per_epoch=self.steps_per_epoch,
-            epochs=self.trainer.max_epochs,
+            total_steps=self.trainer.estimated_stepping_batches,
             pct_start=0.05,
+            epochs=self.trainer.max_epochs,
+            # final_div_factor=self.args.final_div_factor
+            # steps_per_epoch=self.steps_per_epoch,
         )
         lr_scheduler = {"interval": "step", "scheduler": scheduler, "name": "AdamW"}
-        return [optimizer], [lr_scheduler]
+        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler}
+
+    """ Do Not DELETE This Source
+    This Used past on lr_scheduler.
+    """
+    # @property
+    # def num_training_steps(self) -> int:
+    #     """Total training steps inferred from datamodule and devices."""
+    #     if self.trainer.max_steps > 0:
+    #         return self.trainer.max_steps
+
+    #     limit_batches = self.trainer.limit_train_batches
+    #     batches = len(self.trainer.datamodule.train_dataloader())
+    #     batches = min(batches, limit_batches) if isinstance(limit_batches, int) else int(limit_batches * batches)
+
+    #     num_devices = max(1, self.trainer.num_devices)
+
+    #     effective_accum = self.trainer.accumulate_grad_batches * num_devices
+    #     return (batches // effective_accum) * self.trainer.max_epochs
+
+    # @property
+    # def steps_per_epoch(self) -> int:
+    #     return self.num_training_steps // self.trainer.max_epochs

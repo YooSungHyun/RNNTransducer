@@ -43,19 +43,14 @@ class JointNet(nn.Module):
         num_classes: int,
         input_size: int,
         forward_output_size: int,
-        act_func: str = "",
     ):
         super(JointNet, self).__init__()
         self.encoder = AudioTransNet(**transnet_params)
         self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
-        self.act_func_name = act_func.lower()
-        if self.act_func_name == "glu":
-            self.forward_layer = nn.Linear(input_size, forward_output_size * 2, bias=True)
-            self.act_func = nn.GLU()
-        elif self.act_func_name == "gelu":
-            self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
-            self.act_func = nn.GELU(approximate="tanh")
+        self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
+        self.act_func = nn.GELU(approximate="tanh")
+        # self.act_func = nn.Tanh()
         self.fc = nn.Linear(forward_output_size, num_classes, bias=False)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
@@ -84,9 +79,8 @@ class JointNet(nn.Module):
         outputs = torch.cat((encoder_outputs, decoder_outputs), dim=-1)
         # forward_layer는 논문에서 다뤄지는 내용은 아니나, 두개를 concat하면 길어지니, 예측에 중요한 특성을 한번 더 필터링 하기 위함
         # 그냥 다 넣는게 잘될지도 모르고 테스트 해봐야겠음.
-        if self.act_func_name:
-            outputs = self.forward_layer(outputs)
-            outputs = self.act_func(outputs)
+        outputs = self.forward_layer(outputs)
+        outputs = self.act_func(outputs)
         # 마이너스로 많이 가는 값이 있으면 tanh가 더 안정적일 수 있음, 다만 tanh 근사 시키기때문에 gelu도 잘되지 않을까 판단해봄.
         # outputs = self.gelu(outputs)
         outputs = self.fc(outputs)
@@ -114,7 +108,7 @@ class JointNet(nn.Module):
         return outputs
 
     @torch.no_grad()
-    def decode(self, encoder_output: Tensor, max_length: int) -> Tensor:
+    def decode(self, encoder_output: Tensor, max_length: int, bos_token_id: int) -> Tensor:
         """
         Decode `encoder_outputs`.
 
@@ -127,7 +121,7 @@ class JointNet(nn.Module):
             * predicted_log_probs (torch.FloatTensor): Log probability of model predictions.
         """
         pred_tokens, hidden_state = list(), None
-        decoder_input = encoder_output.new_tensor([[self.decoder.bos_token_id]], dtype=torch.long)
+        decoder_input = encoder_output.new_tensor([[bos_token_id]], dtype=torch.long)
 
         for t in range(max_length):
             decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
@@ -141,7 +135,7 @@ class JointNet(nn.Module):
         return torch.LongTensor(pred_tokens)
 
     @torch.no_grad()
-    def recognize(self, inputs: Tensor, input_lengths: Tensor) -> Tensor:
+    def recognize(self, inputs: Tensor, bos_token_id: int) -> Tensor:
         """
         Recognize input speech. This method consists of the forward of the encoder and the decode() of the decoder.
 
@@ -154,12 +148,11 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         outputs = list()
-        # TODO inputs를 padded_pack 시키거나, 이전에서 그렇게 해서 받아야함.
-        encoder_outputs, encoder_hiddens = self.encoder(inputs, input_lengths)
+        encoder_outputs, encoder_hiddens = self.encoder(inputs)
         max_length = encoder_outputs.size(1)
 
         for encoder_output in encoder_outputs:
-            decoded_seq = self.decode(encoder_output, max_length)
+            decoded_seq = self.decode(encoder_output, max_length, bos_token_id)
             outputs.append(decoded_seq)
 
         outputs = torch.stack(outputs, dim=1).transpose(0, 1)
