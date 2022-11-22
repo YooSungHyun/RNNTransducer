@@ -39,8 +39,8 @@ def main(hparams):
         dirpath=hparams.output_dir,
         save_top_k=3,
         mode="min",
-        monitor="val_wer",
-        filename="bart-online-{epoch:02d}-{val_wer:.4f}",
+        monitor="val_loss",
+        filename="bart-online-{epoch:02d}-{val_loss:.4f}",
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     hparams.callbacks = [checkpoint_callback, lr_monitor]
@@ -64,7 +64,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_proc", type=int, default=None, help="how many proc map?")
     parser.add_argument("--model_config", type=str, help="data dirs")
     parser.add_argument("--learning_rate", default=0.001, type=float, help="learning rate")
+    # parser.add_argument(
+    #     "--warmup_ratio", default=0.2, type=float, help="learning rate scheduler warmup ratio per EPOCH"
+    # )
     parser.add_argument("--max_lr", default=0.01, type=float, help="lr_scheduler max learning rate")
+    # parser.add_argument("--final_div_factor", default=1e4, type=int, help="(max_lr/25)*final_div_factor is final lr")
     parser.add_argument("--weight_decay", default=0.0001, type=float, help="weigth decay")
     parser.add_argument(
         "--per_device_train_batch_size",
@@ -90,6 +94,12 @@ if __name__ == "__main__":
         default=False,
         type=str2bool,
         help="The batch size per GPU/TPU core/CPU for training.",
+    )
+    parser.add_argument(
+        "--val_on_cpu",
+        default=False,
+        type=str2bool,
+        help="If you want to run validation_step on cpu -> true",
     )
     args = parser.parse_args()
     main(args)
