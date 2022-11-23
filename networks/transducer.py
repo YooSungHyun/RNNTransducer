@@ -50,7 +50,6 @@ class JointNet(nn.Module):
         self.num_classes = num_classes
         self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
         self.act_func = nn.GELU(approximate="tanh")
-        # self.act_func = nn.Tanh()
         self.fc = nn.Linear(forward_output_size, num_classes, bias=False)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
