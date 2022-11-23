@@ -148,23 +148,6 @@ class RNNTransducer(pl.LightningModule):
             # 이미 cuda면 그냥 던짐
             self.log("val_loss", loss_mean, sync_dist=True)
 
-    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
-    # def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, **kwargs):
-    #     self.should_skip_lr_scheduler_step = False
-    #     scaler = getattr(self.trainer.strategy.precision_plugin, "scaler", None)
-    #     if scaler:
-    #         scale_before_step = scaler.get_scale()
-    #     optimizer.step(closure=optimizer_closure)
-    #     if scaler:
-    #         scale_after_step = scaler.get_scale()
-    #         self.should_skip_lr_scheduler_step = scale_before_step > scale_after_step
-
-    # 아직 해결되지 않은, precision 16에서의 스케쥴러 스텝 오적용 hot fix (https://github.com/Lightning-AI/lightning/issues/5558)
-    # def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
-    #     if self.should_skip_lr_scheduler_step:
-    #         return
-    #     scheduler.step()
-
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             [{"params": [p for p in self.parameters()], "name": "OneCycleLR"}],
@@ -175,9 +158,9 @@ class RNNTransducer(pl.LightningModule):
             optimizer,
             max_lr=self.args.max_lr,
             total_steps=self.trainer.estimated_stepping_batches,
-            pct_start=0.05,
+            pct_start=self.args.warmup_ratio,
             epochs=self.trainer.max_epochs,
-            # final_div_factor=self.args.final_div_factor
+            final_div_factor=self.args.final_div_factor
             # steps_per_epoch=self.steps_per_epoch,
         )
         lr_scheduler = {"interval": "step", "scheduler": scheduler, "name": "AdamW"}

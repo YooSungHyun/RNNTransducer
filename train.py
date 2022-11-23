@@ -64,11 +64,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_proc", type=int, default=None, help="how many proc map?")
     parser.add_argument("--model_config", type=str, help="data dirs")
     parser.add_argument("--learning_rate", default=0.001, type=float, help="learning rate")
-    # parser.add_argument(
-    #     "--warmup_ratio", default=0.2, type=float, help="learning rate scheduler warmup ratio per EPOCH"
-    # )
+    parser.add_argument(
+        "--warmup_ratio", default=0.2, type=float, help="learning rate scheduler warmup ratio per EPOCH"
+    )
     parser.add_argument("--max_lr", default=0.01, type=float, help="lr_scheduler max learning rate")
-    # parser.add_argument("--final_div_factor", default=1e4, type=int, help="(max_lr/25)*final_div_factor is final lr")
+    parser.add_argument("--final_div_factor", default=1e4, type=int, help="(max_lr/25)*final_div_factor is final lr")
     parser.add_argument("--weight_decay", default=0.0001, type=float, help="weigth decay")
     parser.add_argument(
         "--per_device_train_batch_size",
