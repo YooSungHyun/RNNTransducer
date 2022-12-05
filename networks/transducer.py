@@ -15,7 +15,6 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Tuple
 from networks import AudioTransNet, TextPredNet
 
 
@@ -41,16 +40,17 @@ class JointNet(nn.Module):
         transnet_params: dict,
         prednet_params: dict,
         num_classes: int,
-        input_size: int,
-        forward_output_size: int,
+        # forward_output_size: int,
     ):
         super(JointNet, self).__init__()
         self.encoder = AudioTransNet(**transnet_params)
         self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
-        self.forward_layer = nn.Linear(input_size, forward_output_size, bias=True)
-        self.act_func = nn.GELU(approximate="tanh")
-        self.fc = nn.Linear(forward_output_size, num_classes, bias=False)
+        # self.forward_layer = nn.Linear(
+        #     transnet_params["output_size"] + prednet_params["output_size"], forward_output_size, bias=True
+        # )
+        # self.act_func = nn.GELU(approximate="tanh")
+        self.fc = nn.Linear(transnet_params["output_size"] + prednet_params["output_size"], num_classes, bias=False)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
         """
@@ -78,8 +78,8 @@ class JointNet(nn.Module):
         outputs = torch.cat((encoder_outputs, decoder_outputs), dim=-1)
         # forward_layer는 논문에서 다뤄지는 내용은 아니나, 두개를 concat하면 길어지니, 예측에 중요한 특성을 한번 더 필터링 하기 위함
         # 그냥 다 넣는게 잘될지도 모르고 테스트 해봐야겠음.
-        outputs = self.forward_layer(outputs)
-        outputs = self.act_func(outputs)
+        # outputs = self.forward_layer(outputs)
+        # outputs = self.act_func(outputs)
         # 마이너스로 많이 가는 값이 있으면 tanh가 더 안정적일 수 있음, 다만 tanh 근사 시키기때문에 gelu도 잘되지 않을까 판단해봄.
         # outputs = self.gelu(outputs)
         outputs = self.fc(outputs)
@@ -101,13 +101,13 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         # Use for inference only (separate from training_step)
-        enc_state, _ = self.encoder(input_audios)
+        enc_state = self.encoder(input_audios)
         dec_state, _ = self.decoder(input_texts, text_lengths)
         outputs = self.joint(enc_state, dec_state)
         return outputs
 
     @torch.no_grad()
-    def decode(self, encoder_output: Tensor, max_length: int, bos_token_id: int) -> Tensor:
+    def decode(self, encoder_output: Tensor, max_length: int, blank_token_id: int) -> Tensor:
         """
         Decode `encoder_outputs`.
 
@@ -120,7 +120,7 @@ class JointNet(nn.Module):
             * predicted_log_probs (torch.FloatTensor): Log probability of model predictions.
         """
         pred_tokens, hidden_state = list(), None
-        decoder_input = encoder_output.new_tensor([[bos_token_id]], dtype=torch.long)
+        decoder_input = encoder_output.new_tensor([[blank_token_id]], dtype=torch.long)
 
         for t in range(max_length):
             decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
@@ -134,7 +134,7 @@ class JointNet(nn.Module):
         return torch.LongTensor(pred_tokens)
 
     @torch.no_grad()
-    def recognize(self, inputs: Tensor, bos_token_id: int) -> Tensor:
+    def recognize(self, inputs: Tensor, blank_token_id: int) -> Tensor:
         """
         Recognize input speech. This method consists of the forward of the encoder and the decode() of the decoder.
 
@@ -147,11 +147,11 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         outputs = list()
-        encoder_outputs, encoder_hiddens = self.encoder(inputs)
+        encoder_outputs = self.encoder(inputs)
         max_length = encoder_outputs.size(1)
 
         for encoder_output in encoder_outputs:
-            decoded_seq = self.decode(encoder_output, max_length, bos_token_id)
+            decoded_seq = self.decode(encoder_output, max_length, blank_token_id)
             outputs.append(decoded_seq)
 
         outputs = torch.stack(outputs, dim=1).transpose(0, 1)

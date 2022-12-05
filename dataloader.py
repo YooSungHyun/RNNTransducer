@@ -29,7 +29,7 @@ class AudioDataLoader(torch.utils.data.DataLoader):
             input_texts.append(
                 torch.cat(
                     [
-                        torch.full(size=[1], fill_value=self.bos_token_id),
+                        torch.full(size=[1], fill_value=self.pad_token_id),
                         torch.as_tensor(s["input_ids"], dtype=torch.int32),
                     ]
                 )
