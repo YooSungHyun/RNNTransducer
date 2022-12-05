@@ -4,7 +4,7 @@
             "input_size": 80,
             "hidden_size": 320,
             "output_size": 512,
-            "num_layers": 2,
+            "num_layers": 4,
             "rnn_type": "lstm",
             "dropout": 0.2,
             "bidirectional": true
@@ -13,13 +13,12 @@
             "embedding_size": 72,
             "hidden_size": 512,
             "output_size": 512,
-            "num_layers": 2,
+            "num_layers": 1,
             "rnn_type": "lstm",
             "dropout": 0.2
         },
         "jointnet": {
-            "num_classes": 72,
-            "forward_output_size": 512
+            "num_classes": 72
         }
     },
     "data": {

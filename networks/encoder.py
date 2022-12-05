@@ -70,7 +70,7 @@ class AudioTransNet(nn.Module):
             num_layers=num_layers,
             bias=True,
             batch_first=True,
-            dropout=dropout,
+            dropout=(dropout if num_layers > 1 else 0.0),
             bidirectional=bidirectional,
         )
         self.out_proj = nn.Linear(2 * hidden_size if bidirectional else hidden_size, output_size)
@@ -91,8 +91,8 @@ class AudioTransNet(nn.Module):
         """
         # inputs shape: (batch_size, seq, features)의 pack_padded_sequence가 진행된 값.
         # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
-        self.rnn.flatten_parameters()
-        outputs, hidden_states = self.rnn(inputs)
+        # self.rnn.flatten_parameters()
+        outputs, _ = self.rnn(inputs)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
 
         outputs = self.out_proj(outputs)
@@ -100,4 +100,4 @@ class AudioTransNet(nn.Module):
         For bidirectional RNNs, forward and backward are directions 0 and 1 respectively.
         Example of splitting the output layers when batch_first=False: output.view(seq_len, batch, num_directions, hidden_size).
         """
-        return outputs, hidden_states
+        return outputs

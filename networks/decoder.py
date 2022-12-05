@@ -26,12 +26,11 @@ class TextPredNet(nn.Module):
 
     Args:
         embedding_size (int): number of classification
-        hidden_size (int, optional): hidden state dimension of decoder (default: 512)
-        output_size (int, optional): output dimension of encoder and decoder (default: 512)
-        num_layers (int, optional): number of decoder layers (default: 1)
+        pad_token_id (int): embedding pad token id
+        hidden_size (int): hidden state dimension of decoder (default: 512)
+        output_size (int): output dimension of encoder and decoder (default: 512)
+        num_layers (int): number of decoder layers (default: 1)
         rnn_type (str, optional): type of rnn cell (default: lstm)
-        bos_token_id (int, optional): start of sentence identification
-        eos_token_id (int, optional): end of sentence identification
         dropout (float, optional): dropout probability of decoder
 
     Inputs: inputs, input_lengths
@@ -75,7 +74,7 @@ class TextPredNet(nn.Module):
             num_layers=num_layers,
             bias=True,
             batch_first=True,
-            dropout=dropout,
+            dropout=(dropout if num_layers > 1 else 0.0),
             bidirectional=False,
         )
         self.out_proj = nn.Linear(hidden_size, output_size)
@@ -114,7 +113,7 @@ class TextPredNet(nn.Module):
             packed_embedded = nn.utils.rnn.pack_padded_sequence(sorted_embedded, sorted_seq_lengths, batch_first=True)
             # next line just pad_packed tested source code
             # outputs = nn.utils.rnn.pad_packed_sequence(packed_embedded, batch_first=True)
-            self.rnn.flatten_parameters()
+            # self.rnn.flatten_parameters()
             outputs, hidden_states = self.rnn(packed_embedded, prev_hidden_state)
             outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
             # indices로 역정렬해서, indices를 구하면 원본 array의 index순서대로 정렬된다.
@@ -122,7 +121,7 @@ class TextPredNet(nn.Module):
             # pack_padded했던거 원상복구
             outputs = outputs[desorted_indices]
         else:
-            self.rnn.flatten_parameters()
+            # self.rnn.flatten_parameters()
             outputs, hidden_states = self.rnn(embedded, prev_hidden_state)
         outputs = self.out_proj(outputs)
 
