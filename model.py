@@ -57,6 +57,7 @@ class RNNTransducer(pl.LightningModule):
         loss = self.rnnt_loss(logits, targets, tensor_audio_lengths, target_lengths)
 
         self.log("train_loss", loss, sync_dist=True)
+        return {"loss": loss}
 
     def validation_step(self, batch, batch_idx):
         input_audios, audio_lengths, tensor_audio_lengths, input_texts, text_lengths, targets, target_lengths = batch
