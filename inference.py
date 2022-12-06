@@ -7,7 +7,6 @@ from simple_parsing import ArgumentParser
 
 
 def main(hparams):
-    # map_location = {"cuda:1": "cuda:0"}
     # prednet_params, transnet_params, jointnet_params, args
     # prednet_params: dict, transnet_params: dict, jointnet_params: dict, args: Namespace
     datasets = get_concat_dataset(hparams.pl_data_dir, "eval_clean")
@@ -21,7 +20,6 @@ def main(hparams):
         args=hparams,
     )
     model.eval()
-    # logits = self.jointnet
     input_audios = [datasets[0]["input_values"]]
     input_audios = pack_sequence(input_audios)
     with torch.no_grad():

@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch.nn as nn
+import torch
 from torch import Tensor
 from typing import Tuple
 
 
-class AudioTransNet(nn.Module):
+class AudioTransNet(torch.nn.Module):
     """
     Transcription Network of RNN-Transducer.
     Implements the functionalities of the transcription network in the model architecture, where
@@ -46,9 +46,9 @@ class AudioTransNet(nn.Module):
     """
 
     supported_rnns = {
-        "lstm": nn.LSTM,
-        "gru": nn.GRU,
-        "rnn": nn.RNN,
+        "lstm": torch.nn.LSTM,
+        "gru": torch.nn.GRU,
+        "rnn": torch.nn.RNN,
     }
 
     def __init__(
@@ -73,9 +73,9 @@ class AudioTransNet(nn.Module):
             dropout=(dropout if num_layers > 1 else 0.0),
             bidirectional=bidirectional,
         )
-        self.out_proj = nn.Linear(2 * hidden_size if bidirectional else hidden_size, output_size)
+        self.out_proj = torch.nn.Linear(2 * hidden_size if bidirectional else hidden_size, output_size)
 
-    def forward(self, inputs: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor, inputs_lengths: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` for  encoder training.
 
@@ -89,12 +89,17 @@ class AudioTransNet(nn.Module):
                 ``(batch, seq_length, dimension)``
             * hidden_state (torch.LongTensor): The length of output tensor. ``(batch)``
         """
-        # inputs shape: (batch_size, seq, features)의 pack_padded_sequence가 진행된 값.
+        # inputs shape: (batch_size, seq, features)의 pack_padded_sequence가 진행된 값.mel size 추천
+        inputs_lengths = torch.tensor(data=inputs_lengths, device="cpu")
+        sorted_seq_lengths, indices = torch.sort(inputs_lengths, descending=True)
+        inputs = inputs[indices]
+        inputs = torch.nn.utils.rnn.pack_padded_sequence(inputs, sorted_seq_lengths, batch_first=True)
         # DP를 사용하는경우 메모리 연속성을 유지해주기 위함. (메모리상 분산 저장되므로 Weight의 연속 무결성이 사라질 수 있음을 방지함.)
         # self.rnn.flatten_parameters()
         outputs, _ = self.rnn(inputs)
-        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
-
+        _, desorted_indices = torch.sort(indices, descending=False)
+        outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
+        outputs = outputs[desorted_indices]
         outputs = self.out_proj(outputs)
         """
         For bidirectional RNNs, forward and backward are directions 0 and 1 respectively.
