@@ -22,6 +22,5 @@ class LightningModuleArguments:
     final_div_factor: int = 1e4
     weight_decay: float = 0.0001
     val_on_cpu: bool = False
-    learning_rate: float = 1e-4  # Help string for a float argument
     seed: int = None
     local_rank: int = None
