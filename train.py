@@ -1,5 +1,3 @@
-import argparse
-from utils import read_json, str2bool
 import pytorch_lightning as pl
 from model import RNNTransducer
 from datamodule import RNNTransducerDataModule
@@ -9,6 +7,8 @@ from setproctitle import setproctitle
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
+from simple_parsing import ArgumentParser
+from utils import read_json, dataclass_to_namespace, LightningModuleArguments
 
 
 def main(hparams):
@@ -39,8 +39,8 @@ def main(hparams):
         dirpath=hparams.output_dir,
         save_top_k=3,
         mode="min",
-        monitor="val_loss",
-        filename="bart-online-{epoch:02d}-{val_loss:.4f}",
+        monitor="val_cer",
+        filename="bart-online-{epoch:02d}-{val_cer:.4f}",
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     hparams.callbacks = [checkpoint_callback, lr_monitor]
@@ -52,54 +52,9 @@ def main(hparams):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
-    parser.add_argument("--seed", default=None, type=int, help="all seed")
-    parser.add_argument("--local_rank", type=int, help="ddp local rank")
-    parser.add_argument("--hf_data_dirs", nargs="+", default=[], type=str, help="source HuggingFace data dirs")
-    parser.add_argument("--pl_data_dir", type=str, help="target pytorch lightning data dirs")
-    parser.add_argument("--output_dir", type=str, help="model output path")
-    parser.add_argument("--vocab_path", type=str, help="vocab_path")
-    parser.add_argument("--num_shards", type=int, help="target data shard cnt")
-    parser.add_argument("--num_proc", type=int, default=None, help="how many proc map?")
-    parser.add_argument("--model_config", type=str, help="data dirs")
-    parser.add_argument("--learning_rate", default=0.001, type=float, help="learning rate")
-    parser.add_argument(
-        "--warmup_ratio", default=0.2, type=float, help="learning rate scheduler warmup ratio per EPOCH"
-    )
-    parser.add_argument("--max_lr", default=0.01, type=float, help="lr_scheduler max learning rate")
-    parser.add_argument("--final_div_factor", default=1e4, type=int, help="(max_lr/25)*final_div_factor is final lr")
-    parser.add_argument("--weight_decay", default=0.0001, type=float, help="weigth decay")
-    parser.add_argument(
-        "--per_device_train_batch_size",
-        default=1,
-        type=int,
-        help="The batch size per GPU/TPU core/CPU for training.",
-    )
-    parser.add_argument(
-        "--train_batch_drop_last",
-        default=False,
-        type=str2bool,
-        help="The batch size per GPU/TPU core/CPU for training.",
-    )
-
-    parser.add_argument(
-        "--per_device_eval_batch_size",
-        default=1,
-        type=int,
-        help="The batch size per GPU/TPU core/CPU for evaluation.",
-    )
-    parser.add_argument(
-        "--eval_batch_drop_last",
-        default=False,
-        type=str2bool,
-        help="The batch size per GPU/TPU core/CPU for training.",
-    )
-    parser.add_argument(
-        "--val_on_cpu",
-        default=False,
-        type=str2bool,
-        help="If you want to run validation_step on cpu -> true",
-    )
+    parser.add_arguments(LightningModuleArguments, dest="training_args")
     args = parser.parse_args()
+    args = dataclass_to_namespace(args, "training_args")
     main(args)
