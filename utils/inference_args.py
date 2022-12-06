@@ -7,6 +7,7 @@ class InferenceArguments:
 
     pl_data_dir: str = "../datasets"
     vocab_path: str = "../config/vocab.json"
+    model_dir: str = "../model/model.ckpt"
     model_config: str = "../config/config.json"
     val_on_cpu: bool = False
     precision: int = 16

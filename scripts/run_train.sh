@@ -24,9 +24,12 @@ torchrun --standalone --nnodes=1 --nproc_per_node= ../train.py \
     --log_every_n_steps=100 \
     --accelerator=gpu \
     --strategy=ddp \
-    --replace_sampler_ddp=false \
-    --devices=2 \
+    --devices= \
+    --auto_select_gpus=true \
     --auto_scale_batch_size=false \
-    --learning_rate=0.00001 \
-    --max_lr=0.001 \
-    --weight_decay=0.01
+    --learning_rate= \
+    --max_lr= \
+    --precision=16 \
+    --weight_decay= \
+    --warmup_ratio= \
+    --final_div_factor=

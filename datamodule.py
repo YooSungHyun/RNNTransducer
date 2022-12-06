@@ -8,7 +8,8 @@ import numpy as np
 from argparse import Namespace
 from datasets import Dataset
 from dataloader import AudioDataLoader
-from transformers.trainer_pt_utils import DistributedLengthGroupedSampler
+
+# from transformers.trainer_pt_utils import DistributedLengthGroupedSampler
 
 WINDOWS = {
     "hamming": torch.hamming_window,
@@ -211,56 +212,55 @@ class RNNTransducerDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
-        train_sampler = DistributedLengthGroupedSampler(
-            batch_size=self.per_device_eval_batch_size,
-            dataset=self.train_datasets,
-            model_input_name="input_values",
-            lengths=self.train_datasets["audio_len"],
-        )
+        # smart batching not good for RNNTransducer
+        # train_sampler = DistributedLengthGroupedSampler(
+        #     batch_size=self.per_device_eval_batch_size,
+        #     dataset=self.train_datasets,
+        #     model_input_name="input_values",
+        #     lengths=self.train_datasets["audio_len"],
+        # )
         return AudioDataLoader(
             dataset=self.train_datasets,
             batch_size=self.per_device_train_batch_size,
             pad_token_id=self.pad_token_id,
             bos_token_id=self.bos_token_id,
             n_mels=self.n_mels,
-            sampler=train_sampler,
             num_workers=self.num_proc,
             pin_memory=True,
         )
 
     def val_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
-        val_sampler = DistributedLengthGroupedSampler(
-            batch_size=self.per_device_eval_batch_size,
-            dataset=self.val_datasets,
-            model_input_name="input_values",
-            lengths=self.val_datasets["audio_len"],
-        )
+        # val_sampler = DistributedLengthGroupedSampler(
+        #     batch_size=self.per_device_eval_batch_size,
+        #     dataset=self.val_datasets,
+        #     model_input_name="input_values",
+        #     lengths=self.val_datasets["audio_len"],
+        # )
         return AudioDataLoader(
             dataset=self.val_datasets,
             batch_size=self.per_device_eval_batch_size,
             pad_token_id=self.pad_token_id,
             bos_token_id=self.bos_token_id,
             n_mels=self.n_mels,
-            sampler=val_sampler,
             num_workers=self.num_proc,
             pin_memory=True,
         )
 
     def test_dataloader(self):
         # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
-        clean_sampler = DistributedLengthGroupedSampler(
-            batch_size=self.per_device_eval_batch_size,
-            dataset=self.clean_datasets,
-            model_input_name="input_values",
-            lengths=self.clean_datasets["audio_len"],
-        )
-        other_sampler = DistributedLengthGroupedSampler(
-            batch_size=self.per_device_eval_batch_size,
-            dataset=self.other_datasets,
-            model_input_name="input_values",
-            lengths=self.other_datasets["audio_len"],
-        )
+        # clean_sampler = DistributedLengthGroupedSampler(
+        #     batch_size=self.per_device_eval_batch_size,
+        #     dataset=self.clean_datasets,
+        #     model_input_name="input_values",
+        #     lengths=self.clean_datasets["audio_len"],
+        # )
+        # other_sampler = DistributedLengthGroupedSampler(
+        #     batch_size=self.per_device_eval_batch_size,
+        #     dataset=self.other_datasets,
+        #     model_input_name="input_values",
+        #     lengths=self.other_datasets["audio_len"],
+        # )
         return [
             AudioDataLoader(
                 dataset=self.clean_datasets,
@@ -268,7 +268,6 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 pad_token_id=self.pad_token_id,
                 bos_token_id=self.bos_token_id,
                 n_mels=self.n_mels,
-                sampler=clean_sampler,
                 num_workers=self.num_proc,
                 pin_memory=True,
             ),
@@ -278,7 +277,6 @@ class RNNTransducerDataModule(pl.LightningDataModule):
                 pad_token_id=self.pad_token_id,
                 bos_token_id=self.bos_token_id,
                 n_mels=self.n_mels,
-                sampler=other_sampler,
                 num_workers=self.num_proc,
                 pin_memory=True,
             ),
