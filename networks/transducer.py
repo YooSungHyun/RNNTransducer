@@ -86,7 +86,9 @@ class JointNet(nn.Module):
 
         return outputs
 
-    def forward(self, input_audios: Tensor, input_texts: Tensor, text_lengths: Tensor) -> Tensor:
+    def forward(
+        self, input_audios: Tensor, audio_lengths: Tensor, input_texts: Tensor, text_lengths: Tensor
+    ) -> Tensor:
         """
         Forward propagate a `inputs` and `targets` pair for training.
 
@@ -101,7 +103,7 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         # Use for inference only (separate from training_step)
-        enc_state = self.encoder(input_audios)
+        enc_state = self.encoder(input_audios, audio_lengths)
         dec_state, _ = self.decoder(input_texts, text_lengths)
         outputs = self.joint(enc_state, dec_state)
         return outputs
@@ -134,7 +136,7 @@ class JointNet(nn.Module):
         return torch.LongTensor(pred_tokens)
 
     @torch.no_grad()
-    def recognize(self, inputs: Tensor, blank_token_id: int) -> Tensor:
+    def recognize(self, inputs: Tensor, inputs_lengths: Tensor, blank_token_id: int) -> Tensor:
         """
         Recognize input speech. This method consists of the forward of the encoder and the decode() of the decoder.
 
@@ -147,7 +149,7 @@ class JointNet(nn.Module):
             * predictions (torch.FloatTensor): Result of model predictions.
         """
         outputs = list()
-        encoder_outputs = self.encoder(inputs)
+        encoder_outputs = self.encoder(inputs, inputs_lengths)
         max_length = encoder_outputs.size(1)
 
         for encoder_output in encoder_outputs:
