@@ -1,7 +1,5 @@
 from pathlib import Path
 import json
-import os
-import argparse
 
 
 def read_json(fname):
@@ -10,12 +8,10 @@ def read_json(fname):
         return json.load(handle)
 
 
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
+def dataclass_to_namespace(args, args_name):
+    # Dataclass arg to python namespace
+    if args.__contains__(args_name):
+        for key, value in args.__getattribute__(args_name).__dict__.items():
+            args.__setattr__(key, value)
+        args.__delattr__(args_name)
+    return args

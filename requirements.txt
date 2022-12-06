@@ -13,3 +13,4 @@ rouge-score==0.1.2
 transformers==4.24.0
 wandb==0.13.4
 matplotlib==3.6.2
+simple-parsing==0.0.21
