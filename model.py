@@ -115,7 +115,7 @@ class RNNTransducer(pl.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
-            max_lr=self.args.max_lr,
+            max_lr=self.args.learning_rate,
             total_steps=self.trainer.estimated_stepping_batches,
             pct_start=self.args.warmup_ratio,
             epochs=self.trainer.max_epochs,
