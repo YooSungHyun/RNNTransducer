@@ -40,17 +40,13 @@ class JointNet(nn.Module):
         transnet_params: dict,
         prednet_params: dict,
         num_classes: int,
-        # forward_output_size: int,
     ):
         super(JointNet, self).__init__()
         self.encoder = AudioTransNet(**transnet_params)
         self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
-        # self.forward_layer = nn.Linear(
-        #     transnet_params["output_size"] + prednet_params["output_size"], forward_output_size, bias=True
-        # )
-        # self.act_func = nn.GELU(approximate="tanh")
-        self.fc = nn.Linear(transnet_params["output_size"] + prednet_params["output_size"], num_classes, bias=False)
+        self.act_func = nn.GELU(approximate="tanh")
+        self.fc = nn.Linear(transnet_params["output_size"] + prednet_params["output_size"], num_classes)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
         """
@@ -76,12 +72,10 @@ class JointNet(nn.Module):
             decoder_outputs = decoder_outputs.repeat([1, input_length, 1, 1])
 
         outputs = torch.cat((encoder_outputs, decoder_outputs), dim=-1)
-        # forward_layer는 논문에서 다뤄지는 내용은 아니나, 두개를 concat하면 길어지니, 예측에 중요한 특성을 한번 더 필터링 하기 위함
-        # 그냥 다 넣는게 잘될지도 모르고 테스트 해봐야겠음.
-        # outputs = self.forward_layer(outputs)
-        # outputs = self.act_func(outputs)
-        # 마이너스로 많이 가는 값이 있으면 tanh가 더 안정적일 수 있음, 다만 tanh 근사 시키기때문에 gelu도 잘되지 않을까 판단해봄.
-        # outputs = self.gelu(outputs)
+
+        # 논문이나 몇몇 구현체는 요소합 하는 사례도 있는데, 직접 실험해본 결과 concat이 장기에포크 진행 시 더 유리했음.
+        # 아무래도 볼 수 있는 shape이 늘어나기 때문이지 않을까 사료됨.
+        outputs = self.act_func(outputs)
         outputs = self.fc(outputs)
 
         return outputs
@@ -122,16 +116,19 @@ class JointNet(nn.Module):
             * predicted_log_probs (torch.FloatTensor): Log probability of model predictions.
         """
         pred_tokens, hidden_state = list(), None
-        decoder_input = encoder_output.new_tensor([[blank_token_id]], dtype=torch.long)
+        decoder_input = torch.tensor([[blank_token_id]], dtype=torch.long, device=encoder_output.device)
+        decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
 
         for t in range(max_length):
-            decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
             step_output = self.joint(encoder_output[t].view(-1), decoder_output.view(-1))
             step_output = step_output.softmax(dim=0)
             pred_token = step_output.argmax(dim=0)
             pred_token = int(pred_token.item())
-            pred_tokens.append(pred_token)
-            decoder_input = step_output.new_tensor([[pred_token]], dtype=torch.long)
+
+            if pred_token != blank_token_id:
+                pred_tokens.append(pred_token)
+                decoder_input = torch.tensor([[pred_token]], dtype=torch.long, device=decoder_input.device)
+                decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
 
         return torch.LongTensor(pred_tokens)
 
