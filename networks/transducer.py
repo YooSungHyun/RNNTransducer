@@ -103,7 +103,7 @@ class JointNet(nn.Module):
         return outputs
 
     @torch.no_grad()
-    def decode(self, encoder_output: Tensor, max_length: int, blank_token_id: int) -> Tensor:
+    def decode(self, encoder_output: Tensor, max_length: int, blank_token_id: int, max_iters: int = 3) -> Tensor:
         """
         Decode `encoder_outputs`.
 
@@ -120,15 +120,22 @@ class JointNet(nn.Module):
         decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
 
         for t in range(max_length):
-            step_output = self.joint(encoder_output[t].view(-1), decoder_output.view(-1))
-            step_output = step_output.softmax(dim=0)
-            pred_token = step_output.argmax(dim=0)
-            pred_token = int(pred_token.item())
-
-            if pred_token != blank_token_id:
-                pred_tokens.append(pred_token)
-                decoder_input = torch.tensor([[pred_token]], dtype=torch.long, device=decoder_input.device)
-                decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
+            u = 0
+            while u < max_iters:
+                step_output = self.joint(encoder_output[t].view(-1), decoder_output.view(-1))
+                step_output = step_output.softmax(dim=0)
+                pred_token = step_output.argmax(dim=0)
+                pred_token = int(pred_token.item())
+                if pred_token != blank_token_id:
+                    # 최초 리스트의 경우에도 out of index 안나게 하기위해 [-1:] slice로 처리
+                    if pred_tokens[-1:] != pred_token:
+                        # 최종 output의 경우 중복 제거
+                        pred_tokens.append(pred_token)
+                    decoder_input = torch.tensor([[pred_token]], dtype=torch.long, device=decoder_input.device)
+                    decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
+                    u = u + 1
+                else:
+                    break
 
         return torch.LongTensor(pred_tokens)
 
@@ -156,3 +163,48 @@ class JointNet(nn.Module):
         outputs = torch.stack(outputs, dim=1).transpose(0, 1)
 
         return outputs
+
+    @torch.no_grad()
+    def recognize_beams(
+        self, inputs: Tensor, inputs_lengths: Tensor, blank_token_id: int, beam_widths: int = 100, lm=None
+    ):
+        encoder_outputs = self.encoder(inputs, inputs_lengths).squeeze()
+        B_hyps = [{"score": 0.0, "y_star": [blank_token_id], "hidden_state": None}]
+
+        # TODO encoder_output squeeze로 인해, batch는 고려하지 않아도 되는지 확인
+        for encoder_output in encoder_outputs:
+            A_hyps = B_hyps
+            B_hyps = []
+
+            # while True:
+            while len(A_hyps) > 0:
+                y_star = max(A_hyps, key=lambda x: x["score"])
+                A_hyps.remove(y_star)
+
+                decoder_input = torch.tensor([A_hyps["y_star"]], dtype=torch.long, device=encoder_output.device)
+                decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=A_hyps["hidden_state"])
+                # TODO decoder_output의 shape과 위치 적절한지 확인
+                y = self.joint(encoder_output.view(-1), decoder_output.view(-1))
+
+                score_y_star = torch.log_softmax(y, dim=0)
+
+                for k, k_score in enumerate(score_y_star):
+                    beam_hyp = {
+                        "score": y_star["score"] + float(k_score),
+                        "y_star": y_star["y_star"][:],
+                        "hidden_state": y_star["hidden_state"],
+                    }
+
+                    if k == blank_token_id:
+                        B_hyps.append(beam_hyp)
+                    else:
+                        beam_hyp["y_star"].append(int(k))
+                        beam_hyp["hidden_state"] = hidden_state
+
+                        A_hyps.append(beam_hyp)
+
+                if len(B_hyps) >= beam_widths:
+                    break
+
+        nbest_hyps = sorted(B_hyps, key=lambda x: x["score"] / len(x["y_star"]), reverse=True)[:beam_widths]
+        return nbest_hyps
