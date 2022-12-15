@@ -2,7 +2,6 @@ import pytorch_lightning as pl
 from model import RNNTransducer
 from utils import read_json, InferenceArguments, get_concat_dataset, dataclass_to_namespace
 import torch
-from torch.nn.utils.rnn import pack_sequence
 from simple_parsing import ArgumentParser
 
 
@@ -20,13 +19,14 @@ def main(hparams):
         args=hparams,
     )
     model.eval()
-    input_audios = [datasets[0]["input_values"]]
-    input_audios = pack_sequence(input_audios)
+    test_target = datasets[0]
+    input_audios = torch.stack([test_target["input_values"]], dim=0)
+    input_lengths = [s.size(0) for s in input_audios]
     with torch.no_grad():
-        y_hat_logits = model.jointnet.recognize(input_audios, model.tokenizer.bos_token_id).detach()
-    print(y_hat_logits)
-    print(model.tokenizer.decode(datasets[0]["input_ids"]))
-    print(model.tokenizer.batch_decode(y_hat_logits))
+        pred_sentences = model.jointnet.recognize_beams(input_audios, input_lengths, model.tokenizer.pad_token_id, 3)
+    print(model.tokenizer.decode(test_target["input_ids"]))
+    for pred_sentence in pred_sentences:
+        print(model.tokenizer.decode(pred_sentence))
 
 
 if __name__ == "__main__":

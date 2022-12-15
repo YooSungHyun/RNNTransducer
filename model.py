@@ -73,7 +73,7 @@ class RNNTransducer(pl.LightningModule):
         logits = self(input_audios, audio_lengths, input_texts, text_lengths)
         loss = self.rnnt_loss(logits, targets, tensor_audio_lengths, target_lengths)
 
-        pred_tokens = self.jointnet.recognize(input_audios, audio_lengths, self.blank_token_id)
+        pred_tokens = self.jointnet.recognize_greedy(input_audios, audio_lengths, self.blank_token_id, 3)
         pred_texts = self.tokenizer.batch_decode(pred_tokens)
         label_texts = self.tokenizer.batch_decode(targets)
         return {"loss": loss, "pred_texts": pred_texts, "label_texts": label_texts}
