@@ -196,6 +196,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
             self.other_datasets.set_format("torch", ["input_values", "input_ids"])
 
     def train_dataloader(self):
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit() method가 사용합니다.
         return AudioDataLoader(
             dataset=self.train_datasets,
             batch_size=self.per_device_train_batch_size,
@@ -207,6 +208,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 fit(), validate() method가 사용합니다.
         return AudioDataLoader(
             dataset=self.val_datasets,
             batch_size=self.per_device_eval_batch_size,
@@ -218,6 +220,7 @@ class RNNTransducerDataModule(pl.LightningDataModule):
         )
 
     def test_dataloader(self):
+        # setup에서 완성된 datasets를 여기서 사용하십시오. trainer의 test() method가 사용합니다.
         return [
             AudioDataLoader(
                 dataset=self.clean_datasets,

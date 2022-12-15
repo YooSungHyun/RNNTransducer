@@ -2,18 +2,18 @@
     "model": {
         "transnet": {
             "input_size": 80,
-            "hidden_size": 320,
+            "hidden_size": 1024,
             "output_size": 512,
-            "num_layers": 4,
-            "rnn_type": "lstm",
+            "num_layers": 8,
+            "rnn_type": "gru",
             "dropout": 0.2,
             "bidirectional": true
         },
         "prednet": {
             "embedding_size": 72,
-            "hidden_size": 512,
+            "hidden_size": 1024,
             "output_size": 512,
-            "num_layers": 1,
+            "num_layers": 2,
             "rnn_type": "lstm",
             "dropout": 0.2
         },

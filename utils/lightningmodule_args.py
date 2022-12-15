@@ -18,7 +18,6 @@ class LightningModuleArguments:
     model_config: str = "../config/config.json"
     learning_rate: float = 0.001
     warmup_ratio: float = 0.2
-    max_lr: float = 0.01
     final_div_factor: int = 1e4  # (max_lr/div_factor)*final_div_factor is final lr
     weight_decay: float = 0.0001
     val_on_cpu: bool = False
