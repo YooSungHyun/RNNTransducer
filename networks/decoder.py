@@ -101,7 +101,6 @@ class TextPredNet(nn.Module):
         """
         embedded = self.embedding(inputs)
         if input_lengths is not None:
-            # 음성은 Smart Batching을 통해 정렬되므로, 바로 pack_sequence로 리소스를 아꼈지만, text는 embedding때문에 여기서 진행해야함.
             # .cpu()로 하면 디바이스 통신 발생하므로, list로 받은 뒤, 새로 선언해서 아예 cpu에 먼저 박아놓고 사용
             input_lengths = torch.tensor(data=input_lengths, device="cpu")
             sorted_seq_lengths, indices = torch.sort(input_lengths, descending=True)
@@ -109,7 +108,6 @@ class TextPredNet(nn.Module):
             # pack_padded_sequence output : (data, batch_sizes)
             # 잘 모르면 하단 참고: https://simonjisu.github.io/nlp/2018/07/05/packedsequence.html
             # 해당 로직을 돌면, blank로 들어가야하는 맨앞 패딩도 맨 뒤로 이동되서 계산된다. 물론 pad_packed시 다시 blank는 원복한다.
-            # TODO blank도 학습되지 않아야하는 불필요값이므로, pad처럼 처리하고자 하나, 이게 맞는건지 다시 생각해봐야할지도?
             packed_embedded = nn.utils.rnn.pack_padded_sequence(sorted_embedded, sorted_seq_lengths, batch_first=True)
             # next line just pad_packed tested source code
             # outputs = nn.utils.rnn.pad_packed_sequence(packed_embedded, batch_first=True)
