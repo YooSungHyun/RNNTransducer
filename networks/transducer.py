@@ -123,7 +123,8 @@ class JointNet(nn.Module):
         max_length = encoder_outputs.size(1)
 
         for encoder_output in encoder_outputs:
-            pred_tokens, hidden_state = list(), None
+            pred_tokens = [blank_token_id]
+            hidden_state = None
             decoder_input = torch.tensor([[blank_token_id]], dtype=torch.long, device=encoder_output.device)
             decoder_output, hidden_state = self.decoder(decoder_input, prev_hidden_state=hidden_state)
 
@@ -136,7 +137,7 @@ class JointNet(nn.Module):
                     pred_token = int(pred_token.item())
                     if pred_token != blank_token_id:
                         # 최초 리스트의 경우에도 out of index 안나게 하기위해 [-1:] slice로 처리
-                        if pred_tokens[-1:] != pred_token:
+                        if pred_tokens[-1] != pred_token:
                             # 최종 output의 경우 중복 제거
                             pred_tokens.append(pred_token)
                         # 텍스트인 경우, u 그래프 기준으로 위로 올라가야 하므로, 음성 들어있을 또 다른 텍스트를 찾아봅니다.
@@ -147,7 +148,7 @@ class JointNet(nn.Module):
                         # blank여도 일단 토큰은 집어넣으나, 다음 예측을 위한 hidden은 건들지 않습니다.
                         break
 
-            outputs.append(torch.LongTensor(pred_tokens))
+            outputs.append(torch.LongTensor(pred_tokens[1:]))
 
         outputs = torch.stack(outputs, dim=1).transpose(0, 1)
 
@@ -210,19 +211,21 @@ class JointNet(nn.Module):
 
                     if k == blank_token_id:
                         if len(B_hyps) == 0:
-                            # B가 없고, blank라면 프레임의 첫번째 blank 토큰인 경우이다. 이 경우 해당 토큰과 비교되어야 한다.
+                            # B가 없고, blank라면 t1의 u0에서 u1을 판단하려는 경우이다.
+                            # 이 경우 한번도 선택된 적이 없으니, 0.0+log_prob(blank) 된 값을 취한다.
+                            # 비교하고자 하는 것은, 현재가 블랭크라고 가정할때, A너는 더 나아갈 여지가 있느냐? 를 판단하게 된다.
                             just_before_prob_B = beam_hyp["score"]
                         else:
                             # 아닌 경우라면, 무조건 삽입 전 마지막 놈과 비교한다.
                             just_before_prob_B = B_hyps[-1]["score"]
                         B_hyps.append(beam_hyp)
                     else:
-                        # 현재 예측값 max에서 패널티를 준것보다 작은 vocab의 prob은 어짜피 진행될수록 더 작아질테니
-                        # 영향을 못줄 가능성이 높아서, prune 시켜버린다.
+                        # 현재 예측값 max(=best_prob)에서 패널티(=expand_beam)를 준것보다 작은 vocab의 prob은
+                        # 확률 소수점 곱 연산으로 인해, 어짜피 진행될수록 더 작아질테니, 영향을 못줄 가능성이 높아서, prune 시켜버린다.
                         if k_score >= best_prob - expand_beam:
                             # 최초 리스트의 경우에도 out of index 안나게 하기위해 [-1:] slice로 처리
-                            if beam_hyp["y_star"][-1:] != int(k):
-                                # 최종 output의 경우 중복 제거
+                            if beam_hyp["y_star"][-1] != int(k):
+                                # blank가 나오기 전 텍스트 예측은 직전값과 중복으로 들어가면 안됨.
                                 beam_hyp["y_star"].append(int(k))
                             beam_hyp["hidden_state"] = hidden_state
 
