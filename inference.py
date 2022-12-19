@@ -3,6 +3,7 @@ from model import RNNTransducer
 from utils import read_json, InferenceArguments, get_concat_dataset, dataclass_to_namespace
 import torch
 from simple_parsing import ArgumentParser
+import kenlm
 
 
 def main(hparams):
@@ -18,12 +19,15 @@ def main(hparams):
         jointnet_params=model_config_dict["jointnet"],
         args=hparams,
     )
+    lm = kenlm.LanguageModel(hparams.lm_path)
     model.eval()
     test_target = datasets[0]
     input_audios = torch.stack([test_target["input_values"]], dim=0)
     input_lengths = [s.size(0) for s in input_audios]
     with torch.no_grad():
-        pred_sentences = model.jointnet.recognize_beams(input_audios, input_lengths, model.tokenizer.pad_token_id, 3)
+        pred_sentences = model.jointnet.recognize_improved_beams(
+            input_audios, input_lengths, model.tokenizer.pad_token_id, 100, lm=lm, tokenizer=model.tokenizer
+        )
     print(model.tokenizer.decode(test_target["input_ids"]))
     for pred_sentence in pred_sentences:
         print(model.tokenizer.decode(pred_sentence))
