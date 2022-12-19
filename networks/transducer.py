@@ -31,7 +31,7 @@ class JointNet(nn.Module):
         self.decoder = TextPredNet(**prednet_params)
         self.num_classes = num_classes
         self.act_func = nn.GELU(approximate="tanh")
-        self.fc = nn.Linear(transnet_params["output_size"] + prednet_params["output_size"], num_classes, bias=False)
+        self.fc = nn.Linear(transnet_params["output_size"] + prednet_params["output_size"], num_classes)
 
     def joint(self, encoder_outputs: Tensor, decoder_outputs: Tensor) -> Tensor:
         """
