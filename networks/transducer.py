@@ -17,6 +17,8 @@ import torch.nn as nn
 from torch import Tensor
 from networks import AudioTransNet, TextPredNet
 import copy
+from transformers import Wav2Vec2CTCTokenizer
+import kenlm
 
 
 class JointNet(nn.Module):
@@ -148,7 +150,8 @@ class JointNet(nn.Module):
         beam_widths: int = 100,
         state_beam: float = 4.6,
         expand_beam: float = 2.3,
-        lm=None,
+        lm: kenlm = None,
+        tokenizer: Wav2Vec2CTCTokenizer = None,
     ):
         """recognize_improved_beams Improved Beam Search Decoding (https://arxiv.org/abs/1911.01629)
 

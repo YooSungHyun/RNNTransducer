@@ -10,3 +10,4 @@ class InferenceArguments:
     model_dir: str = "../model/model.ckpt"
     model_config: str = "../config/config.json"
     val_on_cpu: bool = False
+    lm_path: str = "../model/lm.arpa"
