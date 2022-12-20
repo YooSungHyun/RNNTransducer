@@ -127,7 +127,6 @@ class JointNet(nn.Module):
                     pred_token = step_output.argmax(dim=0)
                     pred_token = int(pred_token.item())
                     if pred_token != blank_token_id:
-                        # 최초 리스트의 경우에도 out of index 안나게 하기위해 [-1:] slice로 처리
                         if pred_tokens[-1] != pred_token:
                             # 최종 output의 경우 중복 제거
                             pred_tokens.append(pred_token)
@@ -323,7 +322,7 @@ class JointNet(nn.Module):
                     }
                     if k == blank_token_id:
                         # blank는 없는 단어이므로, lm 점수를 그냥 즉시 계산 가능하다.
-                        # 직전 길이 문장의 lm_score + 현재 blank의 asr_score / 직전 lm_state
+                        # 직전 길이 문장의 lm_score + 현재 blank의 asr_score 및 직전 lm_state
                         # lm이나 hotword가 없어, text matching을 전혀 쓰지 않아도, 해당 score는 asr_score와 동치가 된다.
                         beam_hyp["lm_score"] = most_prob_A["lm_score"] + float(asr_score)
                         B_hyps.append(beam_hyp)
